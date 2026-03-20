@@ -183,17 +183,16 @@ export async function startBot(
     try {
       switch (msg.type) {
         case 'send_message': {
-          // Chunk long messages
-          const chunks = chunkText(msg.text, 4096)
+          const htmlText = mdToHtml(msg.text)
+          const chunks = chunkText(htmlText, 4096)
           for (let i = 0; i < chunks.length; i++) {
-            const parseMode = msg.parse_mode || 'Markdown'
             await bot.api.sendMessage(msg.chat_id, chunks[i], {
               message_thread_id: msg.thread_id,
-              parse_mode: parseMode as any,
+              parse_mode: 'HTML',
               ...(msg.reply_to && i === 0 ? { reply_parameters: { message_id: msg.reply_to } } : {}),
             }).catch(async () => {
-              // Fallback: send without formatting if Markdown parsing fails
-              await bot.api.sendMessage(msg.chat_id, chunks[i], {
+              // Fallback: send without formatting if HTML parsing fails
+              await bot.api.sendMessage(msg.chat_id, msg.text, {
                 message_thread_id: msg.thread_id,
                 ...(msg.reply_to && i === 0 ? { reply_parameters: { message_id: msg.reply_to } } : {}),
               })
@@ -244,6 +243,33 @@ export async function startBot(
   bot.start()
 
   return bot
+}
+
+/** Convert common Markdown to Telegram HTML */
+function mdToHtml(text: string): string {
+  // Escape HTML entities first
+  let html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  // Code blocks: ```lang\n...\n``` → <pre><code>...</code></pre>
+  html = html.replace(/```(?:\w*)\n([\s\S]*?)```/g, (_m, code) =>
+    `<pre><code>${code.replace(/<\/?[a-z][^>]*>/gi, '')}</code></pre>`)
+
+  // Inline code: `...` → <code>...</code>
+  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>')
+
+  // Bold: **...** → <b>...</b>
+  html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+
+  // Italic: *...* → <i>...</i> (but not inside words with asterisks)
+  html = html.replace(/(?<!\w)\*([^\s*](?:.*?[^\s*])?)\*(?!\w)/g, '<i>$1</i>')
+
+  // Strikethrough: ~~...~~ → <s>...</s>
+  html = html.replace(/~~(.+?)~~/g, '<s>$1</s>')
+
+  return html
 }
 
 function chunkText(text: string, limit: number): string[] {
