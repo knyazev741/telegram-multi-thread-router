@@ -1,23 +1,20 @@
 import net from 'net'
-import { mkdirSync, existsSync, unlinkSync } from 'fs'
-import { join } from 'path'
+import { randomBytes } from 'crypto'
 import type { ConnectedSession, SessionToProxy, ProxyToSession } from './types.js'
 
 export class IPCServer {
   private sessions: Map<number, ConnectedSession> = new Map()
   private server: net.Server
   private outgoingHandler: ((msg: SessionToProxy) => Promise<void>) | null = null
+  private authToken: string
 
-  constructor(socketDir: string) {
-    mkdirSync(socketDir, { recursive: true })
-    const controlSocket = join(socketDir, 'control.sock')
-
-    if (existsSync(controlSocket)) {
-      unlinkSync(controlSocket)
-    }
+  constructor(port: number, authToken: string) {
+    this.authToken = authToken
 
     this.server = net.createServer(socket => {
       let buffer = ''
+      let authenticated = false
+      const remoteAddr = `${socket.remoteAddress}:${socket.remotePort}`
 
       socket.on('data', data => {
         buffer += data.toString()
@@ -27,7 +24,20 @@ export class IPCServer {
         for (const line of lines) {
           if (!line.trim()) continue
           try {
-            const msg = JSON.parse(line) as SessionToProxy
+            const msg = JSON.parse(line) as SessionToProxy & { auth_token?: string }
+
+            // First message must be register with valid auth_token
+            if (!authenticated) {
+              if (msg.type === 'register' && msg.auth_token === this.authToken) {
+                authenticated = true
+                this.handleSessionMessage(socket, msg)
+              } else {
+                console.warn(`[IPC] Auth failed from ${remoteAddr}`)
+                socket.end(JSON.stringify({ type: 'error', message: 'auth_failed' }) + '\n')
+              }
+              continue
+            }
+
             this.handleSessionMessage(socket, msg)
           } catch (e) {
             console.error('[IPC] Invalid JSON from session:', e)
@@ -38,7 +48,7 @@ export class IPCServer {
       socket.on('close', () => {
         for (const [threadId, session] of this.sessions) {
           if (session.socket === socket) {
-            console.log(`[IPC] Session for thread ${threadId} disconnected`)
+            console.log(`[IPC] Session for thread ${threadId} disconnected (${remoteAddr})`)
             this.sessions.delete(threadId)
             break
           }
@@ -46,12 +56,12 @@ export class IPCServer {
       })
 
       socket.on('error', err => {
-        console.error('[IPC] Socket error:', err.message)
+        console.error(`[IPC] Socket error (${remoteAddr}):`, err.message)
       })
     })
 
-    this.server.listen(controlSocket, () => {
-      console.log(`[IPC] Listening on ${controlSocket}`)
+    this.server.listen(port, '0.0.0.0', () => {
+      console.log(`[IPC] Listening on TCP port ${port}`)
     })
   }
 

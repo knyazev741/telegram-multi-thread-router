@@ -35,13 +35,23 @@ try {
 } catch {}
 
 const THREAD_ID = Number(process.env.TELEGRAM_THREAD_ID)
-const PROXY_SOCKET = process.env.TELEGRAM_PROXY_SOCKET || '/tmp/claude-proxy/control.sock'
+const PROXY_HOST = process.env.TELEGRAM_PROXY_HOST || '127.0.0.1'
+const PROXY_PORT = Number(process.env.TELEGRAM_PROXY_PORT || 9600)
+const AUTH_TOKEN = process.env.TELEGRAM_AUTH_TOKEN || ''
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || ''
 
 if (!THREAD_ID) {
   process.stderr.write(
     `telegram-multi channel: TELEGRAM_THREAD_ID required\n` +
     `  set via env: TELEGRAM_THREAD_ID=42 claude --channels plugin:telegram-multi\n`,
+  )
+  process.exit(1)
+}
+
+if (!AUTH_TOKEN) {
+  process.stderr.write(
+    `telegram-multi channel: TELEGRAM_AUTH_TOKEN required\n` +
+    `  set in ${ENV_FILE} or via env\n`,
   )
   process.exit(1)
 }
@@ -100,16 +110,18 @@ function connectToProxy(): void {
     proxySocket.destroy()
   }
 
-  process.stderr.write(`telegram-multi: connecting to proxy at ${PROXY_SOCKET}...\n`)
+  process.stderr.write(`telegram-multi: connecting to proxy at ${PROXY_HOST}:${PROXY_PORT}...\n`)
 
-  proxySocket = net.createConnection(PROXY_SOCKET, () => {
+  proxySocket = net.createConnection({ host: PROXY_HOST, port: PROXY_PORT }, () => {
     connected = true
     process.stderr.write(`telegram-multi: connected to proxy, registering thread=${THREAD_ID}\n`)
 
+    // First message must include auth_token
     sendToProxy({
       type: 'register',
       thread_id: THREAD_ID,
       chat_id: chatId,
+      auth_token: AUTH_TOKEN,
     })
   })
 
