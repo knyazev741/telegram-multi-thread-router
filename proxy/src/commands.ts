@@ -24,7 +24,7 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
           await ctx.reply(
             `✅ Топик "${name}" создан (thread_id: ${topic.message_thread_id}).\n\n` +
             `Запустите сессию Claude Code:\n` +
-            `TELEGRAM_THREAD_ID=${topic.message_thread_id} claude --channels plugin:telegram-multi`,
+            `TELEGRAM_THREAD_ID=${topic.message_thread_id} claude --channels plugin:telegram-multi@knyaz-private`,
             { message_thread_id: 1 },
           )
         } catch (err: any) {
@@ -77,7 +77,7 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
           '/sessions — показать активные сессии\n' +
           '/help — это сообщение\n\n' +
           'Запуск сессии:\n' +
-          'TELEGRAM_THREAD_ID=<id> claude --channels plugin:telegram-multi',
+          'TELEGRAM_THREAD_ID=<id> claude --channels plugin:telegram-multi@knyaz-private',
         )
         break
       }
