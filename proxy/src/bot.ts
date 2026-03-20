@@ -41,7 +41,7 @@ export async function startBot(
       await ctx.reply(
         '⚠️ Нет подключённой сессии для этого топика.\n' +
         'Запустите сессию:\n' +
-        `TELEGRAM_THREAD_ID=${threadId} claude --channels plugin:telegram-multi@knyaz-private`,
+        `TELEGRAM_THREAD_ID=${threadId} claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private`,
         { message_thread_id: threadId },
       )
       return
