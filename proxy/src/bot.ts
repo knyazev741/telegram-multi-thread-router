@@ -42,7 +42,8 @@ export async function startBot(
     stopTyping(threadId)
     // Send immediately, then every 4s (Telegram typing expires after 5s)
     const send = () => {
-      bot.api.sendChatAction(chatId, 'typing', { message_thread_id: threadId }).catch(() => {})
+      bot.api.sendChatAction(chatId, 'typing', { message_thread_id: threadId })
+        .catch(err => console.error('[Bot] Typing failed:', err.message))
     }
     send()
     typingIntervals.set(threadId, setInterval(send, 4000))
@@ -165,7 +166,7 @@ export async function startBot(
     // Mark as delivered: 👀 reaction + start typing
     bot.api.setMessageReaction(chatId, ctx.message.message_id, [
       { type: 'emoji', emoji: '👀' as any },
-    ]).catch(() => {})
+    ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
     startTyping(chatId, threadId)
   })
 
