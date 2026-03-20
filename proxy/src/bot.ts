@@ -20,6 +20,8 @@ export async function startBot(
     const chatId = ctx.chat.id
     const threadId = ctx.message.message_thread_id
 
+    console.log(`[Bot] Message from userId=${userId}, chatId=${chatId}, threadId=${threadId}, text="${(ctx.message.text || '').slice(0, 50)}"`)
+
     // Access control: only owner
     if (userId !== ownerId) return
 
@@ -36,6 +38,8 @@ export async function startBot(
 
     // Find connected session
     const session = ipc.getSession(threadId)
+    const allSessions = ipc.getConnectedSessions()
+    console.log(`[Bot] Looking for thread=${threadId}, connected sessions: ${JSON.stringify(allSessions.map(s => s.threadId))}`)
 
     if (!session) {
       await ctx.reply(
