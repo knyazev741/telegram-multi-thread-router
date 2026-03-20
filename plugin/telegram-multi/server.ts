@@ -322,6 +322,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             thread_id: THREAD_ID,
             text: c,
             reply_to,
+            parse_mode: 'Markdown',
           })
         }
 

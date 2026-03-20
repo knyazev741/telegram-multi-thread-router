@@ -94,10 +94,7 @@ export async function startBot(
       return
     }
 
-    // Mark as delivered immediately + start typing while we process
-    bot.api.setMessageReaction(chatId, ctx.message.message_id, [
-      { type: 'emoji', emoji: '👀' as any },
-    ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
+    // Start typing while we process (transcription etc.)
     startTyping(chatId, threadId)
 
     // Build incoming message
@@ -169,6 +166,11 @@ export async function startBot(
 
     // Forward to session via IPC
     ipc.sendToSession(threadId, { type: 'incoming_message', message: incoming })
+
+    // 👀 = delivered to Claude session (after sendToSession, not before)
+    bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+      { type: 'emoji', emoji: '👀' as any },
+    ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
   })
 
   // Handle outgoing messages from sessions → Telegram
@@ -186,6 +188,7 @@ export async function startBot(
           for (let i = 0; i < chunks.length; i++) {
             await bot.api.sendMessage(msg.chat_id, chunks[i], {
               message_thread_id: msg.thread_id,
+              ...(msg.parse_mode ? { parse_mode: msg.parse_mode as any } : {}),
               ...(msg.reply_to && i === 0 ? { reply_parameters: { message_id: msg.reply_to } } : {}),
             })
           }
