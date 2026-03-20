@@ -93,6 +93,12 @@ export async function startBot(
       return
     }
 
+    // Mark as delivered immediately + start typing while we process
+    bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+      { type: 'emoji', emoji: '👀' as any },
+    ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
+    startTyping(chatId, threadId)
+
     // Build incoming message
     const incoming: IncomingMessage = {
       message_id: ctx.message.message_id,
@@ -162,12 +168,6 @@ export async function startBot(
 
     // Forward to session via IPC
     ipc.sendToSession(threadId, { type: 'incoming_message', message: incoming })
-
-    // Mark as delivered: 👀 reaction + start typing
-    bot.api.setMessageReaction(chatId, ctx.message.message_id, [
-      { type: 'emoji', emoji: '👀' as any },
-    ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
-    startTyping(chatId, threadId)
   })
 
   // Handle outgoing messages from sessions → Telegram
