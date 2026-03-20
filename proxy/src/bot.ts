@@ -31,9 +31,10 @@ export async function startBot(
   registry: TopicsRegistry,
   ipc: IPCServer,
   publicHost: string = '',
+  pluginName: string = 'telegram-multi@telegram-multi-thread',
 ): Promise<Bot> {
   const bot = new Bot(token)
-  const handleCommand = createCommandHandler(bot, registry, ipc, publicHost)
+  const handleCommand = createCommandHandler(bot, registry, ipc, publicHost, pluginName)
 
   // Typing indicators per thread — cleared when session responds
   const typingIntervals = new Map<number, ReturnType<typeof setInterval>>()
@@ -87,7 +88,7 @@ export async function startBot(
     if (!session) {
       await ctx.reply(
         '⚠️ Нет подключённой сессии для этого топика.\n\n' +
-        launchCommands(threadId, publicHost),
+        launchCommands(threadId, publicHost, pluginName),
         { message_thread_id: threadId, parse_mode: 'HTML' },
       )
       return

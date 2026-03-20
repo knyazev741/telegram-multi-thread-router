@@ -1,8 +1,8 @@
 {
-  "name": "knyaz-private",
-  "description": "Knyaz private plugins",
+  "name": "telegram-multi-thread",
+  "description": "Telegram Multi-Thread Router for Claude Code",
   "owner": {
-    "name": "Knyaz"
+    "name": "Community"
   },
   "plugins": [
     {

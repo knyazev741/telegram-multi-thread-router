@@ -5,8 +5,8 @@ import type { IPCServer } from './ipc-server.js'
 const ICON_COLORS = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
 let colorIndex = 0
 
-export function launchCommands(threadId: number | string, publicHost: string): string {
-  const claudeCmd = 'claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private --dangerously-skip-permissions'
+export function launchCommands(threadId: number | string, publicHost: string, pluginName: string = 'telegram-multi@telegram-multi-thread'): string {
+  const claudeCmd = `claude --dangerously-load-development-channels plugin:${pluginName} --dangerously-skip-permissions`
   let msg = '🖥 <b>На сервере:</b>\n'
   msg += `<pre>TELEGRAM_THREAD_ID=${threadId} ${claudeCmd}</pre>`
   if (publicHost) {
@@ -16,7 +16,7 @@ export function launchCommands(threadId: number | string, publicHost: string): s
   return msg
 }
 
-export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IPCServer, publicHost: string = '') {
+export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IPCServer, publicHost: string = '', pluginName: string = 'telegram-multi@telegram-multi-thread') {
   return async function handleCommand(ctx: Context): Promise<void> {
     const text = ctx.message?.text || ''
     const args = text.split(/\s+/)
@@ -35,7 +35,7 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
           await ctx.reply(
             `✅ Топик "<b>${name}</b>" создан (thread_id: ${topic.message_thread_id})\n\n` +
             `Запустите сессию Claude Code:\n\n` +
-            launchCommands(topic.message_thread_id, publicHost),
+            launchCommands(topic.message_thread_id, publicHost, pluginName),
             { message_thread_id: 1, parse_mode: 'HTML' },
           )
         } catch (err: any) {
@@ -88,7 +88,7 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
           '/sessions — показать активные сессии\n' +
           '/help — это сообщение\n\n' +
           '<b>Запуск сессии:</b>\n\n' +
-          launchCommands('&lt;id&gt;', publicHost),
+          launchCommands('&lt;id&gt;', publicHost, pluginName),
           { parse_mode: 'HTML' },
         )
         break

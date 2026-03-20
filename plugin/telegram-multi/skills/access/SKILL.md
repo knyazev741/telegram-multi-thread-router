@@ -19,7 +19,7 @@ Edit the Proxy's `.env` file (on the server where the Proxy runs):
 
 ```
 BOT_TOKEN=123456789:AAH...
-OWNER_USER_ID=412587349
+OWNER_USER_ID=123456789
 ```
 
 To find your Telegram user ID, message @userinfobot on Telegram.

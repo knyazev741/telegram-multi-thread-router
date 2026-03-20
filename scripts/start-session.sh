@@ -14,4 +14,5 @@ fi
 cd "$WORKDIR" || exit 1
 
 echo "Starting Claude Code session for thread=$THREAD_ID in $(pwd)..."
-TELEGRAM_THREAD_ID="$THREAD_ID" claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private --dangerously-skip-permissions
+PLUGIN_NAME="${PLUGIN_NAME:-telegram-multi@telegram-multi-thread}"
+TELEGRAM_THREAD_ID="$THREAD_ID" claude --dangerously-load-development-channels "plugin:$PLUGIN_NAME" --dangerously-skip-permissions

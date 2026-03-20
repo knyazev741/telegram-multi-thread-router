@@ -43,7 +43,7 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID || ''
 if (!THREAD_ID) {
   process.stderr.write(
     `telegram-multi channel: TELEGRAM_THREAD_ID required\n` +
-    `  set via env: TELEGRAM_THREAD_ID=42 claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private\n`,
+    `  set via env: TELEGRAM_THREAD_ID=42 claude --dangerously-load-development-channels plugin:telegram-multi@<marketplace>\n`,
   )
   process.exit(1)
 }

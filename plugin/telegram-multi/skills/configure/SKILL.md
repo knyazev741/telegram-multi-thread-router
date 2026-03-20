@@ -21,8 +21,9 @@ Configure the Telegram Multi-Thread channel for this Claude Code session.
 `~/.claude/channels/telegram-multi/.env` — stores configuration:
 ```
 TELEGRAM_THREAD_ID=42
-TELEGRAM_PROXY_SOCKET=/tmp/claude-proxy/control.sock
-TELEGRAM_CHAT_ID=412587349
+TELEGRAM_PROXY_HOST=127.0.0.1
+TELEGRAM_PROXY_PORT=9600
+TELEGRAM_AUTH_TOKEN=your-secret-token
 ```
 
 ## Usage
