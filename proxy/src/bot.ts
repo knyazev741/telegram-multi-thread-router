@@ -13,7 +13,7 @@ const TRANSCRIBE_SCRIPT = resolve(__dirname, '../scripts/transcribe.py')
 
 function transcribeAudio(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('python3', [TRANSCRIBE_SCRIPT, filePath], { timeout: 60000 }, (err, stdout, stderr) => {
+    execFile('python3', [TRANSCRIBE_SCRIPT, filePath], { timeout: 300000 }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(stderr || err.message))
         return
