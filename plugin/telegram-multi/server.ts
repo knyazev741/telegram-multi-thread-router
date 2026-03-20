@@ -207,6 +207,11 @@ function handleProxyMessage(msg: any): void {
         meta.document_path = m.document.file_path
         meta.document_name = m.document.file_name || 'file'
       }
+      if (m.voice) {
+        meta.voice = 'true'
+        meta.voice_duration = String(m.voice.duration)
+        if (m.voice.file_path) meta.voice_path = m.voice.file_path
+      }
 
       void mcp.notification({
         method: 'notifications/claude/channel',

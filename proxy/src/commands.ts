@@ -5,7 +5,18 @@ import type { IPCServer } from './ipc-server.js'
 const ICON_COLORS = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
 let colorIndex = 0
 
-export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IPCServer) {
+export function launchCommands(threadId: number | string, publicHost: string): string {
+  const claudeCmd = 'claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private --dangerously-skip-permissions'
+  let msg = '🖥 <b>На сервере:</b>\n'
+  msg += `<pre>TELEGRAM_THREAD_ID=${threadId} ${claudeCmd}</pre>`
+  if (publicHost) {
+    msg += '\n\n💻 <b>Локально:</b>\n'
+    msg += `<pre>TELEGRAM_THREAD_ID=${threadId} TELEGRAM_PROXY_HOST=${publicHost} ${claudeCmd}</pre>`
+  }
+  return msg
+}
+
+export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IPCServer, publicHost: string = '') {
   return async function handleCommand(ctx: Context): Promise<void> {
     const text = ctx.message?.text || ''
     const args = text.split(/\s+/)
@@ -22,10 +33,10 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
           registry.add(topic.message_thread_id, name)
 
           await ctx.reply(
-            `✅ Топик "${name}" создан (thread_id: ${topic.message_thread_id}).\n\n` +
-            `Запустите сессию Claude Code:\n` +
-            `TELEGRAM_THREAD_ID=${topic.message_thread_id} claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private`,
-            { message_thread_id: 1 },
+            `✅ Топик "<b>${name}</b>" создан (thread_id: ${topic.message_thread_id})\n\n` +
+            `Запустите сессию Claude Code:\n\n` +
+            launchCommands(topic.message_thread_id, publicHost),
+            { message_thread_id: 1, parse_mode: 'HTML' },
           )
         } catch (err: any) {
           await ctx.reply(`❌ Ошибка создания топика: ${err.message}`)
@@ -71,13 +82,14 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
 
       case '/help': {
         await ctx.reply(
-          'Команды управления:\n\n' +
-          '/new <название> — создать новый топик\n' +
+          '<b>Команды управления:</b>\n\n' +
+          '/new &lt;название&gt; — создать новый топик\n' +
           '/list — показать все топики и статус сессий\n' +
           '/sessions — показать активные сессии\n' +
           '/help — это сообщение\n\n' +
-          'Запуск сессии:\n' +
-          'TELEGRAM_THREAD_ID=<id> claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private',
+          '<b>Запуск сессии:</b>\n\n' +
+          launchCommands('&lt;id&gt;', publicHost),
+          { parse_mode: 'HTML' },
         )
         break
       }

@@ -1,18 +1,37 @@
 import { Bot, InputFile } from 'grammy'
+import { execFile } from 'child_process'
+import { resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import type { TopicsRegistry } from './topics-registry.js'
 import type { IPCServer } from './ipc-server.js'
-import { createCommandHandler } from './commands.js'
+import { createCommandHandler, launchCommands } from './commands.js'
 import { downloadFile } from './file-handler.js'
 import type { SessionToProxy, IncomingMessage } from './types.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const TRANSCRIBE_SCRIPT = resolve(__dirname, '../scripts/transcribe.py')
+
+function transcribeAudio(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('python3', [TRANSCRIBE_SCRIPT, filePath], { timeout: 60000 }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(stderr || err.message))
+        return
+      }
+      resolve(stdout.trim())
+    })
+  })
+}
 
 export async function startBot(
   token: string,
   ownerId: number,
   registry: TopicsRegistry,
   ipc: IPCServer,
+  publicHost: string = '',
 ): Promise<Bot> {
   const bot = new Bot(token)
-  const handleCommand = createCommandHandler(bot, registry, ipc)
+  const handleCommand = createCommandHandler(bot, registry, ipc, publicHost)
 
   // All messages handler
   bot.on('message', async ctx => {
@@ -43,10 +62,9 @@ export async function startBot(
 
     if (!session) {
       await ctx.reply(
-        '⚠️ Нет подключённой сессии для этого топика.\n' +
-        'Запустите сессию:\n' +
-        `TELEGRAM_THREAD_ID=${threadId} claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private`,
-        { message_thread_id: threadId },
+        '⚠️ Нет подключённой сессии для этого топика.\n\n' +
+        launchCommands(threadId, publicHost),
+        { message_thread_id: threadId, parse_mode: 'HTML' },
       )
       return
     }
@@ -95,6 +113,27 @@ export async function startBot(
         console.error('[Bot] Document download failed:', err.message)
       }
       incoming.text = incoming.caption || `(document: ${ctx.message.document.file_name})`
+    }
+
+    // Handle voice messages
+    if (ctx.message.voice) {
+      try {
+        const localPath = await downloadFile(bot, ctx.message.voice.file_id, ctx.message.message_id, 'voice.ogg')
+        incoming.voice = {
+          file_id: ctx.message.voice.file_id,
+          file_path: localPath,
+          duration: ctx.message.voice.duration,
+        }
+
+        console.log(`[Bot] Transcribing voice message (${ctx.message.voice.duration}s)...`)
+        const transcription = await transcribeAudio(localPath)
+        incoming.voice.transcription = transcription
+        incoming.text = transcription || '(voice message, transcription failed)'
+        console.log(`[Bot] Transcription: "${transcription.slice(0, 100)}"`)
+      } catch (err: any) {
+        console.error('[Bot] Voice handling failed:', err.message)
+        incoming.text = '(voice message, transcription failed)'
+      }
     }
 
     // Forward to session via IPC

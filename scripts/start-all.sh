@@ -23,7 +23,7 @@ sleep 2
 for entry in "${SESSIONS[@]}"; do
   IFS='|' read -r thread_id name workdir <<< "$entry"
   tmux new-window -t claude-proxy -n "$name" \
-    "cd $workdir && TELEGRAM_THREAD_ID=$thread_id claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private"
+    "cd $workdir && TELEGRAM_THREAD_ID=$thread_id claude --dangerously-load-development-channels plugin:telegram-multi@knyaz-private --dangerously-skip-permissions"
   echo "✅ Session '$name' started (thread: $thread_id, dir: $workdir)"
   sleep 1
 done

@@ -15,6 +15,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN
 const OWNER_USER_ID = process.env.OWNER_USER_ID
 const IPC_PORT = Number(process.env.IPC_PORT || 9600)
 const AUTH_TOKEN = process.env.AUTH_TOKEN || randomBytes(32).toString('hex')
+const PUBLIC_HOST = process.env.PUBLIC_HOST || ''
 
 if (!BOT_TOKEN) {
   console.error('BOT_TOKEN is required in .env')
@@ -41,7 +42,7 @@ async function main() {
   const ipc = new IPCServer(IPC_PORT, AUTH_TOKEN)
 
   // 3. Start bot (long polling)
-  const bot = await startBot(BOT_TOKEN!, Number(OWNER_USER_ID), registry, ipc)
+  const bot = await startBot(BOT_TOKEN!, Number(OWNER_USER_ID), registry, ipc, PUBLIC_HOST)
 
   // 4. Graceful shutdown
   const shutdown = () => {

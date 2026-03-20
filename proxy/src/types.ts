@@ -26,6 +26,7 @@ export interface IncomingMessage {
   }
   photo?: { file_id: string; file_path?: string }
   document?: { file_id: string; file_name: string; file_path?: string }
+  voice?: { file_id: string; file_path?: string; duration: number; transcription?: string }
 }
 
 export interface TopicEntry {

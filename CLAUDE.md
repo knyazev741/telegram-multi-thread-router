@@ -34,9 +34,10 @@ cd telegram-multi-thread-router
 2. **Create `.env`** (on server, never in repo):
 ```bash
 cat > .env << 'EOF'
-TELEGRAM_BOT_TOKEN=<from @BotFather>
-TELEGRAM_API_ID=<from my.telegram.org>
-TELEGRAM_API_HASH=<from my.telegram.org>
+BOT_TOKEN=<from @BotFather>
+OWNER_USER_ID=<your Telegram user ID>
+AUTH_TOKEN=<shared secret for session auth>
+PUBLIC_HOST=167.235.155.73
 EOF
 chmod 600 .env
 ```
