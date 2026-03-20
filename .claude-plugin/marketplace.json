@@ -1,0 +1,15 @@
+{
+  "name": "knyaz-private",
+  "description": "Knyaz private plugins",
+  "owner": {
+    "name": "Knyaz"
+  },
+  "plugins": [
+    {
+      "name": "telegram-multi",
+      "description": "Telegram Multi-Thread channel for Claude Code — routes messages via forum topics through a central proxy.",
+      "category": "productivity",
+      "source": "./plugin/telegram-multi"
+    }
+  ]
+}
