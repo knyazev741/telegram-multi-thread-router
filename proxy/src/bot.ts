@@ -11,9 +11,11 @@ import type { SessionToProxy, IncomingMessage } from './types.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TRANSCRIBE_SCRIPT = resolve(__dirname, '../scripts/transcribe.py')
 
-function transcribeAudio(filePath: string): Promise<string> {
+function transcribeAudio(filePath: string, durationSec: number): Promise<string> {
+  // ~10s processing per 1s audio on CPU with medium model, plus 30s for model load
+  const timeoutMs = Math.max(60000, (durationSec * 10 + 30) * 1000)
   return new Promise((resolve, reject) => {
-    execFile('python3', [TRANSCRIBE_SCRIPT, filePath], { timeout: 300000 }, (err, stdout, stderr) => {
+    execFile('python3', [TRANSCRIBE_SCRIPT, filePath], { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(stderr || err.message))
         return
@@ -126,7 +128,7 @@ export async function startBot(
         }
 
         console.log(`[Bot] Transcribing voice message (${ctx.message.voice.duration}s)...`)
-        const transcription = await transcribeAudio(localPath)
+        const transcription = await transcribeAudio(localPath, ctx.message.voice.duration)
         incoming.voice.transcription = transcription
         incoming.text = transcription || '(voice message, transcription failed)'
         console.log(`[Bot] Transcription: "${transcription.slice(0, 100)}"`)
