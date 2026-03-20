@@ -186,10 +186,17 @@ export async function startBot(
           // Chunk long messages
           const chunks = chunkText(msg.text, 4096)
           for (let i = 0; i < chunks.length; i++) {
+            const parseMode = msg.parse_mode || 'Markdown'
             await bot.api.sendMessage(msg.chat_id, chunks[i], {
               message_thread_id: msg.thread_id,
-              ...(msg.parse_mode ? { parse_mode: msg.parse_mode as any } : {}),
+              parse_mode: parseMode as any,
               ...(msg.reply_to && i === 0 ? { reply_parameters: { message_id: msg.reply_to } } : {}),
+            }).catch(async () => {
+              // Fallback: send without formatting if Markdown parsing fails
+              await bot.api.sendMessage(msg.chat_id, chunks[i], {
+                message_thread_id: msg.thread_id,
+                ...(msg.reply_to && i === 0 ? { reply_parameters: { message_id: msg.reply_to } } : {}),
+              })
             })
           }
           break
