@@ -35,6 +35,27 @@ export async function startBot(
   const bot = new Bot(token)
   const handleCommand = createCommandHandler(bot, registry, ipc, publicHost)
 
+  // Typing indicators per thread — cleared when session responds
+  const typingIntervals = new Map<number, ReturnType<typeof setInterval>>()
+
+  function startTyping(chatId: string | number, threadId: number) {
+    stopTyping(threadId)
+    // Send immediately, then every 4s (Telegram typing expires after 5s)
+    const send = () => {
+      bot.api.sendChatAction(chatId, 'typing', { message_thread_id: threadId }).catch(() => {})
+    }
+    send()
+    typingIntervals.set(threadId, setInterval(send, 4000))
+  }
+
+  function stopTyping(threadId: number) {
+    const interval = typingIntervals.get(threadId)
+    if (interval) {
+      clearInterval(interval)
+      typingIntervals.delete(threadId)
+    }
+  }
+
   // All messages handler
   bot.on('message', async ctx => {
     const userId = ctx.from?.id
@@ -140,10 +161,21 @@ export async function startBot(
 
     // Forward to session via IPC
     ipc.sendToSession(threadId, { type: 'incoming_message', message: incoming })
+
+    // Mark as delivered: 👀 reaction + start typing
+    bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+      { type: 'emoji', emoji: '👀' as any },
+    ]).catch(() => {})
+    startTyping(chatId, threadId)
   })
 
   // Handle outgoing messages from sessions → Telegram
   ipc.onOutgoing(async (msg: SessionToProxy) => {
+    // Stop typing when session sends any visible response
+    if ('thread_id' in msg && msg.thread_id) {
+      stopTyping(msg.thread_id)
+    }
+
     try {
       switch (msg.type) {
         case 'send_message': {
