@@ -62,6 +62,7 @@ let proxySocket: net.Socket | null = null
 let connected = false
 let chatId = CHAT_ID
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
 const MAX_CHUNK_LIMIT = 4096
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
@@ -114,6 +115,10 @@ function connectToProxy(): void {
 
   proxySocket = net.createConnection({ host: PROXY_HOST, port: PROXY_PORT }, () => {
     connected = true
+    // TCP keepalive — prevent idle timeout drops
+    proxySocket!.setKeepAlive(true, 15000)
+    proxySocket!.setNoDelay(true)
+
     process.stderr.write(`telegram-multi: connected to proxy, registering thread=${THREAD_ID}\n`)
 
     // First message must include auth_token
@@ -123,6 +128,14 @@ function connectToProxy(): void {
       chat_id: chatId,
       auth_token: AUTH_TOKEN,
     })
+
+    // Heartbeat every 30s to keep connection alive
+    if (heartbeatTimer) clearInterval(heartbeatTimer)
+    heartbeatTimer = setInterval(() => {
+      if (connected) {
+        try { proxySocket!.write('{"type":"ping"}\n') } catch {}
+      }
+    }, 30000)
   })
 
   let buffer = ''
@@ -144,6 +157,7 @@ function connectToProxy(): void {
 
   proxySocket.on('close', () => {
     connected = false
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
     process.stderr.write(`telegram-multi: disconnected from proxy, reconnecting in 3s...\n`)
     scheduleReconnect()
   })

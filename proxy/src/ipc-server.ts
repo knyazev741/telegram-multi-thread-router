@@ -16,6 +16,10 @@ export class IPCServer {
       let authenticated = false
       const remoteAddr = `${socket.remoteAddress}:${socket.remotePort}`
 
+      // Keep connection alive
+      socket.setKeepAlive(true, 15000)
+      socket.setNoDelay(true)
+
       socket.on('data', data => {
         buffer += data.toString()
         const lines = buffer.split('\n')
@@ -65,7 +69,10 @@ export class IPCServer {
     })
   }
 
-  private handleSessionMessage(socket: net.Socket, msg: SessionToProxy) {
+  private handleSessionMessage(socket: net.Socket, msg: SessionToProxy & { type: string }) {
+    // Heartbeat — just ignore
+    if (msg.type === 'ping') return
+
     switch (msg.type) {
       case 'register': {
         const { thread_id, chat_id } = msg
