@@ -1,0 +1,13 @@
+{
+  "name": "telegram-multi",
+  "description": "Telegram Multi-Thread channel for Claude Code — routes messages via forum topics through a central proxy.",
+  "version": "1.0.0",
+  "keywords": [
+    "telegram",
+    "messaging",
+    "channel",
+    "mcp",
+    "multi-thread",
+    "forum-topics"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "telegram-multi-thread-proxy",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node"
+  },
+  "dependencies": {
+    "grammy": "^1.21.0",
+    "dotenv": "^16.4.0"
+  }
+}

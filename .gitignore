@@ -1,0 +1,7 @@
+.env
+node_modules/
+dist/
+bun.lock
+proxy/data/topics.json
+/tmp/
+*.sock
