@@ -11,10 +11,13 @@ Communicate in Russian.
 
 ## Servers
 
-| Alias | IP | SSH | Repos path |
-|---|---|---|---|
-| personal-server | 167.235.155.73 | `ssh personal-server` | /root/ |
-| business-server | 116.203.112.192 | `ssh business-server-full` | /root/ |
+| Alias | IP | SSH | Repos path | User |
+|---|---|---|---|---|
+| personal-server | 167.235.155.73 | `ssh personal-server` | /root/ | root |
+| business-server | 116.203.112.192 | `ssh business-server-full` | /root/ | root |
+| mac | Knyaz's MacBook (reverse tunnel) | `ssh mac` | /Users/knyaz/ | knyaz |
+
+**Mac availability:** Mac is connected via reverse SSH tunnel (port 2223). It is available only when the Mac is on and awake. If `ssh mac` times out — Mac is offline, tell the user.
 
 ### Known repos
 
@@ -35,6 +38,10 @@ Communicate in Russian.
 - `vibecraft-lite` — /root/vibecraft-lite
 - `Topic-sorter` — /root/Topic-sorter
 - `telegram-multi-thread-router` — /root/telegram-multi-thread-router
+
+**mac:**
+- `Telegram Multi-Thread Router` — /Users/knyaz/Telegram Multi-Thread Router
+- Other repos — check /Users/knyaz/ as needed
 
 User may refer to repos by short names (e.g. "ai manager", "ks", "agent"). Match flexibly.
 
@@ -66,8 +73,11 @@ curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
 # If target is this server (personal-server):
 cd /root/<repo> && nohup /root/telegram-multi-thread-router/scripts/start-session.sh <thread_id> /root/<repo> > /tmp/session-<thread_id>.log 2>&1 &
 
-# If target is another server:
+# If target is business-server:
 ssh business-server-full "cd /root/<repo> && nohup /root/telegram-multi-thread-router/scripts/start-session.sh <thread_id> /root/<repo> > /tmp/session-<thread_id>.log 2>&1 &"
+
+# If target is mac:
+ssh mac "cd /Users/knyaz/<repo> && nohup /Users/knyaz/Telegram\ Multi-Thread\ Router/scripts/start-session.sh <thread_id> /Users/knyaz/<repo> > /tmp/session-<thread_id>.log 2>&1 &"
 ```
 
 ### Step 4: Confirm to user
@@ -79,11 +89,14 @@ Reply with the topic name, thread_id, and that the session is starting.
 
 ### Check if session is alive
 ```bash
-# Local sessions:
+# Local sessions (personal-server):
 ps aux | grep "TELEGRAM_THREAD_ID=<thread_id>" | grep -v grep
 
-# Remote sessions:
+# Remote sessions (business-server):
 ssh business-server-full "ps aux | grep 'TELEGRAM_THREAD_ID=<thread_id>' | grep -v grep"
+
+# Mac sessions:
+ssh mac "ps aux | grep 'TELEGRAM_THREAD_ID=<thread_id>' | grep -v grep"
 ```
 
 ### Kill a session
