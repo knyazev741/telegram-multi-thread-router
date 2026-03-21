@@ -27,6 +27,12 @@ export interface IncomingMessage {
   photo?: { file_id: string; file_path?: string }
   document?: { file_id: string; file_name: string; file_path?: string }
   voice?: { file_id: string; file_path?: string; duration: number; transcription?: string }
+  /** Recent chat messages for context (group chat mode) */
+  recent_messages?: Array<{
+    from: string
+    text: string
+    ts: string
+  }>
 }
 
 export interface TopicEntry {

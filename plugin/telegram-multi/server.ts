@@ -190,7 +190,13 @@ function handleProxyMessage(msg: any): void {
       const m = msg.message
       if (m.thread_id !== THREAD_ID) return // extra safety filter
 
-      const text = m.text || m.caption || ''
+      // Build content: message text + recent chat history for context
+      let content = m.text || m.caption || ''
+      if (m.recent_messages && m.recent_messages.length > 0) {
+        const historyLines = m.recent_messages.map((h: any) => `[${h.ts}] ${h.from}: ${h.text}`).join('\n')
+        content = `${content}\n\n<chat_history>\n${historyLines}\n</chat_history>`
+      }
+
       const meta: Record<string, string> = {
         chat_id: String(m.chat_id),
         ...(m.message_id != null ? { message_id: String(m.message_id) } : {}),
@@ -215,7 +221,7 @@ function handleProxyMessage(msg: any): void {
 
       void mcp.notification({
         method: 'notifications/claude/channel',
-        params: { content: text, meta },
+        params: { content, meta },
       })
       break
     }

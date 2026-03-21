@@ -38,6 +38,25 @@ export async function startBot(
   const bot = new Bot(token)
   const handleCommand = createCommandHandler(bot, registry, ipc, publicHost, pluginName)
 
+  // Ring buffer of recent messages per group chat (for context)
+  const chatHistory = new Map<number, Array<{ from: string; text: string; ts: string }>>()
+  const MAX_HISTORY = 20
+
+  function recordMessage(chatId: number, from: string, text: string) {
+    if (!text) return
+    let history = chatHistory.get(chatId)
+    if (!history) {
+      history = []
+      chatHistory.set(chatId, history)
+    }
+    history.push({ from, text: text.slice(0, 500), ts: new Date().toISOString() })
+    if (history.length > MAX_HISTORY) history.shift()
+  }
+
+  function getRecentHistory(chatId: number): Array<{ from: string; text: string; ts: string }> {
+    return chatHistory.get(chatId) || []
+  }
+
   // Typing indicators per thread — cleared when session responds
   const typingIntervals = new Map<number, ReturnType<typeof setInterval>>()
 
@@ -70,9 +89,14 @@ export async function startBot(
 
     // Group chat mode: handle messages from the configured group
     if (groupChatId && chatId === groupChatId) {
-      // Check if bot is @mentioned or message is a reply to bot
       const botUsername = bot.botInfo.username
       const text = ctx.message.text || ctx.message.caption || ''
+      const fromName = ctx.from?.username || ctx.from?.first_name || `user${userId}`
+
+      // Record ALL messages for history context (before filtering)
+      recordMessage(chatId, fromName, text)
+
+      // Check if bot is @mentioned or message is a reply to bot
       const isMentioned = botUsername && text.includes(`@${botUsername}`)
       const isReplyToBot = ctx.message.reply_to_message?.from?.id === bot.botInfo.id
 
@@ -94,9 +118,13 @@ export async function startBot(
 
       // Build message, include reply context if present
       let messageText = text.replace(`@${botUsername}`, '').trim()
-      if (ctx.message.reply_to_message && !isReplyToBot) {
-        const replyText = (ctx.message.reply_to_message as any).text || ''
-        if (replyText) messageText = `[reply to: "${replyText.slice(0, 200)}"]\n\n${messageText}`
+      if (ctx.message.reply_to_message) {
+        const reply = ctx.message.reply_to_message as any
+        const replyFrom = reply.from?.username || reply.from?.first_name || 'unknown'
+        const replyText = reply.text || reply.caption || ''
+        if (replyText) {
+          messageText = `[реплай на сообщение от ${replyFrom}: "${replyText.slice(0, 500)}"]\n\n${messageText}`
+        }
       }
 
       const incoming: IncomingMessage = {
@@ -109,6 +137,7 @@ export async function startBot(
           first_name: ctx.from!.first_name,
           username: ctx.from!.username,
         },
+        recent_messages: getRecentHistory(chatId),
       }
 
       // Handle photos in group
@@ -285,6 +314,10 @@ export async function startBot(
     try {
       switch (msg.type) {
         case 'send_message': {
+          // Record bot's own message in group chat history
+          if (groupChatId && String(groupChatId) === msg.chat_id) {
+            recordMessage(groupChatId, bot.botInfo.username || 'bot', msg.text)
+          }
           const htmlText = mdToHtml(msg.text)
           const chunks = chunkText(htmlText, 4096)
           for (let i = 0; i < chunks.length; i++) {
