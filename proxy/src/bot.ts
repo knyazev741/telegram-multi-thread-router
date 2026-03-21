@@ -7,6 +7,7 @@ import type { IPCServer } from './ipc-server.js'
 import { createCommandHandler, launchCommands } from './commands.js'
 import { downloadFile } from './file-handler.js'
 import type { SessionToProxy, IncomingMessage } from './types.js'
+import { ChatHistory } from './chat-history.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TRANSCRIBE_SCRIPT = resolve(__dirname, '../scripts/transcribe.py')
@@ -34,28 +35,13 @@ export async function startBot(
   pluginName: string = 'telegram-multi@telegram-multi-thread',
   groupChatId?: number,
   groupThreadId: number = 1,
+  dataDir: string = './data',
 ): Promise<Bot> {
   const bot = new Bot(token)
   const handleCommand = createCommandHandler(bot, registry, ipc, publicHost, pluginName)
 
-  // Ring buffer of recent messages per group chat (for context)
-  const chatHistory = new Map<number, Array<{ from: string; text: string; ts: string }>>()
-  const MAX_HISTORY = 20
-
-  function recordMessage(chatId: number, from: string, text: string) {
-    if (!text) return
-    let history = chatHistory.get(chatId)
-    if (!history) {
-      history = []
-      chatHistory.set(chatId, history)
-    }
-    history.push({ from, text: text.slice(0, 500), ts: new Date().toISOString() })
-    if (history.length > MAX_HISTORY) history.shift()
-  }
-
-  function getRecentHistory(chatId: number): Array<{ from: string; text: string; ts: string }> {
-    return chatHistory.get(chatId) || []
-  }
+  // Persistent chat history (SQLite)
+  const chatHistory = new ChatHistory(dataDir)
 
   // Typing indicators per thread — cleared when session responds
   const typingIntervals = new Map<number, ReturnType<typeof setInterval>>()
@@ -93,8 +79,19 @@ export async function startBot(
       const text = ctx.message.text || ctx.message.caption || ''
       const fromName = ctx.from?.username || ctx.from?.first_name || `user${userId}`
 
-      // Record ALL messages for history context (before filtering)
-      recordMessage(chatId, fromName, text)
+      // Save ALL messages to persistent DB (before filtering)
+      chatHistory.save({
+        chat_id: chatId,
+        message_id: ctx.message.message_id,
+        thread_id: threadId,
+        user_id: userId!,
+        username: ctx.from?.username,
+        first_name: ctx.from?.first_name || '',
+        text,
+        has_photo: !!(ctx.message.photo && ctx.message.photo.length > 0),
+        has_document: !!ctx.message.document,
+        has_voice: !!ctx.message.voice,
+      })
 
       // Check if bot is @mentioned or message is a reply to bot
       const isMentioned = botUsername && text.includes(`@${botUsername}`)
@@ -151,7 +148,11 @@ export async function startBot(
           first_name: ctx.from!.first_name,
           username: ctx.from!.username,
         },
-        recent_messages: getRecentHistory(chatId),
+        recent_messages: chatHistory.getRecent(chatId, 15).reverse().map(m => ({
+          from: m.username || m.first_name,
+          text: m.text,
+          ts: m.ts,
+        })),
         reply_thread_id: threadId, // actual Telegram thread to reply in
         photo: replyPhoto, // photo from replied message (if any)
       }
@@ -330,9 +331,16 @@ export async function startBot(
     try {
       switch (msg.type) {
         case 'send_message': {
-          // Record bot's own message in group chat history
+          // Record bot's own message in persistent history
           if (groupChatId && String(groupChatId) === msg.chat_id) {
-            recordMessage(groupChatId, bot.botInfo.username || 'bot', msg.text)
+            chatHistory.save({
+              chat_id: groupChatId,
+              message_id: Date.now(), // placeholder, will be replaced if we get the real ID
+              user_id: bot.botInfo.id,
+              username: bot.botInfo.username || 'bot',
+              first_name: bot.botInfo.first_name || 'Bot',
+              text: msg.text,
+            })
           }
           const htmlText = mdToHtml(msg.text)
           const chunks = chunkText(htmlText, 4096)

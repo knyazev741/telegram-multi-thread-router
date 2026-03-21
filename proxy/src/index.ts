@@ -45,7 +45,8 @@ async function main() {
   const ipc = new IPCServer(IPC_PORT, AUTH_TOKEN)
 
   // 3. Start bot (long polling)
-  const bot = await startBot(BOT_TOKEN!, Number(OWNER_USER_ID), registry, ipc, PUBLIC_HOST, PLUGIN_NAME, GROUP_CHAT_ID, GROUP_THREAD_ID)
+  const dataDir = resolve(__dirname, '../data')
+  const bot = await startBot(BOT_TOKEN!, Number(OWNER_USER_ID), registry, ipc, PUBLIC_HOST, PLUGIN_NAME, GROUP_CHAT_ID, GROUP_THREAD_ID, dataDir)
 
   // 4. Graceful shutdown
   const shutdown = () => {
