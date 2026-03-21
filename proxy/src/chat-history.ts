@@ -73,6 +73,13 @@ export class ChatHistory {
     )
   }
 
+  updateText(chatId: number, messageId: number, text: string): void {
+    this.db.run(
+      `UPDATE messages SET text = ? WHERE chat_id = ? AND message_id = ?`,
+      [text.slice(0, 2000), chatId, messageId],
+    )
+  }
+
   getRecent(chatId: number, limit: number = 15): ChatMessage[] {
     return this.db.query(
       `SELECT id, chat_id, message_id, thread_id, user_id, username, first_name, text, ts

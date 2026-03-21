@@ -90,8 +90,22 @@ export async function startBot(
         text,
         has_photo: !!(ctx.message.photo && ctx.message.photo.length > 0),
         has_document: !!ctx.message.document,
-        has_voice: !!ctx.message.voice,
+        has_voice: !!(ctx.message.voice || (ctx.message as any).video_note),
       })
+
+      // Background-transcribe voice/video_note for ALL messages (updates DB)
+      if (ctx.message.voice || (ctx.message as any).video_note) {
+        const media = ctx.message.voice || (ctx.message as any).video_note
+        const msgId = ctx.message.message_id
+        const label = ctx.message.voice ? 'голосовое' : 'кружочек'
+        const ext = ctx.message.voice ? 'voice.ogg' : 'video_note.mp4'
+        downloadFile(bot, media.file_id, msgId, ext)
+          .then(localPath => transcribeAudio(localPath, media.duration))
+          .then(transcription => {
+            chatHistory.updateText(chatId, msgId, `[${label}] ${transcription}`)
+          })
+          .catch(err => console.error(`[Bot] Background ${label} transcription failed:`, err.message))
+      }
 
       // Check if bot is @mentioned or message is a reply to bot
       const isMentioned = botUsername && text.includes(`@${botUsername}`)
@@ -177,9 +191,27 @@ export async function startBot(
           const transcription = await transcribeAudio(localPath, ctx.message.voice.duration)
           incoming.text = transcription || '(voice, transcription failed)'
           incoming.voice = { file_id: ctx.message.voice.file_id, file_path: localPath, duration: ctx.message.voice.duration, transcription }
+          // Update DB with transcription text
+          chatHistory.updateText(chatId, ctx.message.message_id, `[голосовое] ${transcription}`)
         } catch (err: any) {
           console.error('[Bot] Voice processing failed:', err.message)
           incoming.text = '(voice message, processing failed)'
+        }
+      }
+
+      // Handle video notes (кружочки) in group
+      if ((ctx.message as any).video_note) {
+        const videoNote = (ctx.message as any).video_note
+        try {
+          const localPath = await downloadFile(bot, videoNote.file_id, ctx.message.message_id, 'video_note.mp4')
+          console.log(`[Bot] Transcribing group video note (${videoNote.duration}s)...`)
+          const transcription = await transcribeAudio(localPath, videoNote.duration)
+          incoming.text = transcription || '(video note, transcription failed)'
+          incoming.voice = { file_id: videoNote.file_id, file_path: localPath, duration: videoNote.duration, transcription }
+          chatHistory.updateText(chatId, ctx.message.message_id, `[кружочек] ${transcription}`)
+        } catch (err: any) {
+          console.error('[Bot] Video note processing failed:', err.message)
+          incoming.text = '(video note, processing failed)'
         }
       }
 
