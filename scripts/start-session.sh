@@ -28,9 +28,14 @@ echo "  Directory: $WORKDIR"
 echo "  tmux:      $SESSION_NAME"
 echo "  Plugin:    $PLUGIN_NAME"
 
+# Build claude command (--dangerously-skip-permissions not allowed as root)
+CLAUDE_CMD="TELEGRAM_THREAD_ID=$THREAD_ID claude --dangerously-load-development-channels plugin:$PLUGIN_NAME"
+if [ "$(id -u)" -ne 0 ]; then
+  CLAUDE_CMD="$CLAUDE_CMD --dangerously-skip-permissions"
+fi
+
 # Start in tmux
-tmux new-session -d -s "$SESSION_NAME" -c "$WORKDIR" \
-  "TELEGRAM_THREAD_ID=$THREAD_ID claude --dangerously-load-development-channels plugin:$PLUGIN_NAME --dangerously-skip-permissions"
+tmux new-session -d -s "$SESSION_NAME" -c "$WORKDIR" "$CLAUDE_CMD"
 
 # Wait for the development channels confirmation prompt and auto-confirm
 sleep 3
