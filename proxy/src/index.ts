@@ -17,6 +17,8 @@ const IPC_PORT = Number(process.env.IPC_PORT || 9600)
 const AUTH_TOKEN = process.env.AUTH_TOKEN || randomBytes(32).toString('hex')
 const PUBLIC_HOST = process.env.PUBLIC_HOST || ''
 const PLUGIN_NAME = process.env.PLUGIN_NAME || 'telegram-multi@telegram-multi-thread'
+const GROUP_CHAT_ID = process.env.GROUP_CHAT_ID ? Number(process.env.GROUP_CHAT_ID) : undefined
+const GROUP_THREAD_ID = process.env.GROUP_THREAD_ID ? Number(process.env.GROUP_THREAD_ID) : 1
 
 if (!BOT_TOKEN) {
   console.error('BOT_TOKEN is required in .env')
@@ -43,7 +45,7 @@ async function main() {
   const ipc = new IPCServer(IPC_PORT, AUTH_TOKEN)
 
   // 3. Start bot (long polling)
-  const bot = await startBot(BOT_TOKEN!, Number(OWNER_USER_ID), registry, ipc, PUBLIC_HOST, PLUGIN_NAME)
+  const bot = await startBot(BOT_TOKEN!, Number(OWNER_USER_ID), registry, ipc, PUBLIC_HOST, PLUGIN_NAME, GROUP_CHAT_ID, GROUP_THREAD_ID)
 
   // 4. Graceful shutdown
   const shutdown = () => {
@@ -59,6 +61,9 @@ async function main() {
   console.log('[Proxy] Ready. Waiting for sessions to connect...')
   console.log(`[Proxy] IPC TCP port: ${IPC_PORT}`)
   console.log(`[Proxy] Owner: ${OWNER_USER_ID}`)
+  if (GROUP_CHAT_ID) {
+    console.log(`[Proxy] Group chat: ${GROUP_CHAT_ID} (thread: ${GROUP_THREAD_ID})`)
+  }
 }
 
 main().catch(err => {

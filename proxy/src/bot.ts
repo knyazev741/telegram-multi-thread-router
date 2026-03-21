@@ -32,6 +32,8 @@ export async function startBot(
   ipc: IPCServer,
   publicHost: string = '',
   pluginName: string = 'telegram-multi@telegram-multi-thread',
+  groupChatId?: number,
+  groupThreadId: number = 1,
 ): Promise<Bot> {
   const bot = new Bot(token)
   const handleCommand = createCommandHandler(bot, registry, ipc, publicHost, pluginName)
@@ -65,6 +67,83 @@ export async function startBot(
     const threadId = ctx.message.message_thread_id
 
     console.log(`[Bot] Message from userId=${userId}, chatId=${chatId}, threadId=${threadId}, text="${(ctx.message.text || '').slice(0, 50)}"`)
+
+    // Group chat mode: handle messages from the configured group
+    if (groupChatId && chatId === groupChatId) {
+      // Check if bot is @mentioned or message is a reply to bot
+      const botUsername = bot.botInfo.username
+      const text = ctx.message.text || ctx.message.caption || ''
+      const isMentioned = botUsername && text.includes(`@${botUsername}`)
+      const isReplyToBot = ctx.message.reply_to_message?.from?.id === bot.botInfo.id
+
+      if (!isMentioned && !isReplyToBot) return // Ignore messages not directed at bot
+
+      // Use configured thread for the group, register if needed
+      const effectiveThread = groupThreadId
+      if (!registry.has(effectiveThread)) {
+        registry.add(effectiveThread, 'group-chat')
+      }
+
+      const session = ipc.getSession(effectiveThread)
+      if (!session) {
+        console.log(`[Bot] No session for group thread=${effectiveThread}`)
+        return // Silently ignore if no session — don't spam the group
+      }
+
+      startTyping(chatId, threadId || 0)
+
+      // Build message, include reply context if present
+      let messageText = text.replace(`@${botUsername}`, '').trim()
+      if (ctx.message.reply_to_message && !isReplyToBot) {
+        const replyText = (ctx.message.reply_to_message as any).text || ''
+        if (replyText) messageText = `[reply to: "${replyText.slice(0, 200)}"]\n\n${messageText}`
+      }
+
+      const incoming: IncomingMessage = {
+        message_id: ctx.message.message_id,
+        thread_id: effectiveThread,
+        chat_id: String(chatId),
+        text: messageText,
+        from: {
+          id: ctx.from!.id,
+          first_name: ctx.from!.first_name,
+          username: ctx.from!.username,
+        },
+      }
+
+      // Handle photos in group
+      if (ctx.message.photo && ctx.message.photo.length > 0) {
+        const best = ctx.message.photo[ctx.message.photo.length - 1]
+        try {
+          const localPath = await downloadFile(bot, best.file_id, ctx.message.message_id)
+          incoming.photo = { file_id: best.file_id, file_path: localPath }
+        } catch (err: any) {
+          console.error('[Bot] Photo download failed:', err.message)
+        }
+        incoming.text = messageText || incoming.caption || '(photo)'
+      }
+
+      // Handle voice in group
+      if (ctx.message.voice) {
+        try {
+          const localPath = await downloadFile(bot, ctx.message.voice.file_id, ctx.message.message_id, 'voice.ogg')
+          console.log(`[Bot] Transcribing group voice (${ctx.message.voice.duration}s)...`)
+          const transcription = await transcribeAudio(localPath, ctx.message.voice.duration)
+          incoming.text = transcription || '(voice, transcription failed)'
+          incoming.voice = { file_id: ctx.message.voice.file_id, file_path: localPath, duration: ctx.message.voice.duration, transcription }
+        } catch (err: any) {
+          console.error('[Bot] Voice processing failed:', err.message)
+          incoming.text = '(voice message, processing failed)'
+        }
+      }
+
+      const sent = ipc.sendToSession(effectiveThread, { type: 'incoming_message', message: incoming })
+      console.log(`[Bot] Group message → session thread=${effectiveThread}: ${sent ? 'OK' : 'FAILED'}`)
+      stopTyping(threadId || 0)
+      return
+    }
+
+    // === Private chat mode (original behavior) ===
 
     // Access control: only owner
     if (userId !== ownerId) return
