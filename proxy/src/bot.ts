@@ -118,12 +118,26 @@ export async function startBot(
 
       // Build message, include reply context if present
       let messageText = text.replace(`@${botUsername}`, '').trim()
+      let replyPhoto: { file_id: string; file_path?: string } | undefined
       if (ctx.message.reply_to_message) {
         const reply = ctx.message.reply_to_message as any
         const replyFrom = reply.from?.username || reply.from?.first_name || 'unknown'
         const replyText = reply.text || reply.caption || ''
         if (replyText) {
           messageText = `[реплай на сообщение от ${replyFrom}: "${replyText.slice(0, 500)}"]\n\n${messageText}`
+        }
+        // Download photo from the replied message
+        if (reply.photo && reply.photo.length > 0) {
+          const best = reply.photo[reply.photo.length - 1]
+          try {
+            const localPath = await downloadFile(bot, best.file_id, reply.message_id)
+            replyPhoto = { file_id: best.file_id, file_path: localPath }
+            if (!replyText) {
+              messageText = `[реплай на фото от ${replyFrom}]\n\n${messageText}`
+            }
+          } catch (err: any) {
+            console.error('[Bot] Reply photo download failed:', err.message)
+          }
         }
       }
 
@@ -139,9 +153,10 @@ export async function startBot(
         },
         recent_messages: getRecentHistory(chatId),
         reply_thread_id: threadId, // actual Telegram thread to reply in
+        photo: replyPhoto, // photo from replied message (if any)
       }
 
-      // Handle photos in group
+      // Handle photos in the message itself (overrides reply photo)
       if (ctx.message.photo && ctx.message.photo.length > 0) {
         const best = ctx.message.photo[ctx.message.photo.length - 1]
         try {
