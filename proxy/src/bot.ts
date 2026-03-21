@@ -165,7 +165,8 @@ export async function startBot(
     }
 
     // Forward to session via IPC
-    ipc.sendToSession(threadId, { type: 'incoming_message', message: incoming })
+    const sent = ipc.sendToSession(threadId, { type: 'incoming_message', message: incoming })
+    console.log(`[Bot] sendToSession thread=${threadId}: ${sent ? 'OK' : 'FAILED'}`)
 
     // 👀 = delivered to Claude session (after sendToSession, not before)
     bot.api.setMessageReaction(chatId, ctx.message.message_id, [
