@@ -69,7 +69,7 @@ export async function startBot(
     // Access control: only owner
     if (userId !== ownerId) return
 
-    // General topic → management commands
+    // General topic → management commands only
     if (!threadId || threadId === 1) {
       return handleCommand(ctx)
     }
