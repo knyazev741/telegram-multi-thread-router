@@ -83,9 +83,10 @@ curl -s "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
 
 ### Step 3: Launch Claude Code session on target server
 
-start-session.sh args: `<thread_id> [workdir] [session_name] [model]`
+start-session.sh args: `<thread_id> [workdir] [session_name] [model] [resume_id]`
 - model defaults to `opus` if not specified
 - available models: `opus`, `sonnet`, `haiku`
+- pass `resume_id` (5th arg) to resume an existing conversation with `--resume`
 
 ```bash
 # If target is this server (personal-server):
@@ -134,6 +135,47 @@ Check all running claude processes with TELEGRAM_THREAD_ID on each server.
 
 - **Simple requests** (status check, list sessions): do it, reply once.
 - **Multi-step requests** (create topic + launch session): first reply "Понял, создаю сессию в <repo>", then do the work, then reply with result.
+
+---
+
+## Resuming Sessions
+
+To resume an existing conversation, pass the session UUID as the 5th argument:
+```bash
+# Example: resume on mac
+ssh mac "cd /Users/knyaz/<repo> && nohup /Users/knyaz/Telegram\ Multi-Thread\ Router/scripts/start-session.sh <thread_id> /Users/knyaz/<repo> tg-<thread_id> opus <session_uuid> > /tmp/session-<thread_id>.log 2>&1 &"
+```
+
+### Finding session UUIDs
+Sessions are stored as `.jsonl` files under `~/.claude/projects/`. The directory name encodes the project path with dashes instead of slashes.
+
+```bash
+# On mac — find sessions for a repo:
+ssh mac "ls -lt /Users/knyaz/.claude/projects/-Users-knyaz-<RepoName>/*.jsonl | head -5"
+
+# Search for a keyword in session history:
+ssh mac "grep -l 'keyword' /Users/knyaz/.claude/projects/-Users-knyaz-<RepoName>/*.jsonl"
+```
+
+**Important:** The project directory name uses the **exact repo folder name** with dashes. Examples:
+- `/Users/knyaz/MCPGoogle` → `-Users-knyaz-MCPGoogle`
+- `/Users/knyaz/Telegram Multi-Thread Router` → `-Users-knyaz-Telegram-Multi-Thread-Router`
+
+---
+
+## Troubleshooting Mac Sessions
+
+SSH to Mac goes through a reverse tunnel (port 2223). Common issues:
+
+1. **Mac offline/asleep**: `ssh mac` times out. Tell the user Mac is unavailable.
+2. **tmux not found via SSH**: Non-interactive SSH may miss PATH. The start-session.sh script handles this by adding `/opt/homebrew/bin` to PATH.
+3. **Session appears to start but doesn't respond**: Check the log:
+   ```bash
+   ssh mac "cat /tmp/session-<thread_id>.log"
+   ssh mac "tmux capture-pane -t tg-<thread_id> -p"
+   ```
+4. **Resume fails — session file not found**: The session `.jsonl` must exist on the target machine. Sessions created on Mac are only on Mac, not on server. Use `find` or `ls` to locate the correct UUID (see "Finding session UUIDs" above).
+5. **nohup + SSH disconnect**: When running via `ssh mac "nohup ... &"`, the tmux session survives SSH disconnect. Always verify with `ssh mac "tmux has-session -t tg-<thread_id>"` after a few seconds.
 
 ---
 

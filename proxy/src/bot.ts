@@ -102,15 +102,15 @@ export async function startBot(
 
       if (!isMentioned && !isReplyToBot) return // Ignore messages not directed at bot
 
-      // Use configured thread for the group, register if needed
-      const effectiveThread = groupThreadId
-      if (!registry.has(effectiveThread)) {
-        registry.add(effectiveThread, 'group-chat')
+      // Single session serves entire group chat (thread=groupThreadId for IPC routing)
+      const ipcThread = groupThreadId
+      if (!registry.has(ipcThread)) {
+        registry.add(ipcThread, 'group-chat')
       }
 
-      const session = ipc.getSession(effectiveThread)
+      const session = ipc.getSession(ipcThread)
       if (!session) {
-        console.log(`[Bot] No session for group thread=${effectiveThread}`)
+        console.log(`[Bot] No session for group (ipc thread=${ipcThread})`)
         return // Silently ignore if no session — don't spam the group
       }
 
@@ -129,7 +129,7 @@ export async function startBot(
 
       const incoming: IncomingMessage = {
         message_id: ctx.message.message_id,
-        thread_id: effectiveThread,
+        thread_id: ipcThread, // route through single IPC session
         chat_id: String(chatId),
         text: messageText,
         from: {
@@ -138,6 +138,7 @@ export async function startBot(
           username: ctx.from!.username,
         },
         recent_messages: getRecentHistory(chatId),
+        reply_thread_id: threadId, // actual Telegram thread to reply in
       }
 
       // Handle photos in group
@@ -166,8 +167,8 @@ export async function startBot(
         }
       }
 
-      const sent = ipc.sendToSession(effectiveThread, { type: 'incoming_message', message: incoming })
-      console.log(`[Bot] Group message → session thread=${effectiveThread}: ${sent ? 'OK' : 'FAILED'}`)
+      const sent = ipc.sendToSession(ipcThread, { type: 'incoming_message', message: incoming })
+      console.log(`[Bot] Group message → session (telegram thread=${threadId}): ${sent ? 'OK' : 'FAILED'}`)
       stopTyping(threadId || 0)
       return
     }

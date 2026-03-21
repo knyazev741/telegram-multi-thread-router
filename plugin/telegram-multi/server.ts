@@ -61,6 +61,7 @@ if (!AUTH_TOKEN) {
 let proxySocket: net.Socket | null = null
 let connected = false
 let chatId = CHAT_ID
+let lastReplyThreadId = THREAD_ID // actual Telegram thread for replies (updated on each incoming)
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
@@ -197,13 +198,17 @@ function handleProxyMessage(msg: any): void {
         content = `${content}\n\n<chat_history>\n${historyLines}\n</chat_history>`
       }
 
+      // Use reply_thread_id (actual Telegram thread) if available, otherwise THREAD_ID
+      if (m.reply_thread_id != null) lastReplyThreadId = m.reply_thread_id
+      const replyThreadId = m.reply_thread_id != null ? String(m.reply_thread_id) : String(THREAD_ID)
+
       const meta: Record<string, string> = {
         chat_id: String(m.chat_id),
         ...(m.message_id != null ? { message_id: String(m.message_id) } : {}),
         user: m.from?.username ?? String(m.from?.id),
         user_id: String(m.from?.id),
         ts: new Date().toISOString(),
-        thread_id: String(THREAD_ID),
+        thread_id: replyThreadId,
       }
 
       if (m.photo?.file_path) {
@@ -340,13 +345,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           }
         }
 
-        // Send text chunks
+        // Send text chunks (use lastReplyThreadId for correct forum thread)
+        const replyThread = lastReplyThreadId
         const chunks = chunk(text, MAX_CHUNK_LIMIT)
         for (const c of chunks) {
           sendToProxy({
             type: 'send_message',
             chat_id,
-            thread_id: THREAD_ID,
+            thread_id: replyThread,
             text: c,
             reply_to,
             parse_mode: 'Markdown',
@@ -360,7 +366,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             sendToProxy({
               type: 'send_photo',
               chat_id,
-              thread_id: THREAD_ID,
+              thread_id: replyThread,
               file_path: f,
               reply_to,
             })
@@ -368,7 +374,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             sendToProxy({
               type: 'send_document',
               chat_id,
-              thread_id: THREAD_ID,
+              thread_id: replyThread,
               file_path: f,
               reply_to,
             })

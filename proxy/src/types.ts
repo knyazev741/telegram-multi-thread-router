@@ -27,6 +27,8 @@ export interface IncomingMessage {
   photo?: { file_id: string; file_path?: string }
   document?: { file_id: string; file_name: string; file_path?: string }
   voice?: { file_id: string; file_path?: string; duration: number; transcription?: string }
+  /** Actual Telegram thread to reply in (group chat mode) */
+  reply_thread_id?: number
   /** Recent chat messages for context (group chat mode) */
   recent_messages?: Array<{
     from: string

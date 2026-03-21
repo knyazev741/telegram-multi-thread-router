@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start a Claude Code session bound to a specific thread in tmux
-# Usage: ./start-session.sh <thread_id> [workdir] [session_name] [model]
+# Usage: ./start-session.sh <thread_id> [workdir] [session_name] [model] [resume_id]
 #
 # The session runs in tmux and survives SSH disconnects.
 # Auto-confirms the development channels prompt.
@@ -14,6 +14,7 @@ THREAD_ID="$1"
 WORKDIR="${2:-.}"
 SESSION_NAME="${3:-tg-$THREAD_ID}"
 MODEL="${4:-opus}"
+RESUME_ID="$5"
 PLUGIN_NAME="${PLUGIN_NAME:-telegram-multi@knyaz-private}"
 
 if [ -z "$THREAD_ID" ]; then
@@ -34,9 +35,14 @@ echo "  Directory: $WORKDIR"
 echo "  Model:     $MODEL"
 echo "  tmux:      $SESSION_NAME"
 echo "  Plugin:    $PLUGIN_NAME"
+[ -n "$RESUME_ID" ] && echo "  Resume:    $RESUME_ID"
 
 # Build claude command (--dangerously-skip-permissions not allowed as root)
-CLAUDE_CMD="export PATH='$PATH' && TELEGRAM_THREAD_ID=$THREAD_ID claude --model $MODEL --dangerously-load-development-channels plugin:$PLUGIN_NAME"
+CLAUDE_CMD="export PATH='$PATH' && TELEGRAM_THREAD_ID=$THREAD_ID claude --model $MODEL"
+if [ -n "$RESUME_ID" ]; then
+  CLAUDE_CMD="$CLAUDE_CMD --resume $RESUME_ID"
+fi
+CLAUDE_CMD="$CLAUDE_CMD --dangerously-load-development-channels plugin:$PLUGIN_NAME"
 if [ "$(id -u)" -ne 0 ]; then
   CLAUDE_CMD="$CLAUDE_CMD --dangerously-skip-permissions"
 fi
@@ -45,16 +51,29 @@ fi
 tmux new-session -d -s "$SESSION_NAME" -c "$WORKDIR" "$CLAUDE_CMD"
 
 # Wait for the development channels confirmation prompt and auto-confirm
-sleep 3
-tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
+# Poll until prompt appears (up to 30s) instead of fixed sleep
+for i in $(seq 1 30); do
+  sleep 1
+  PANE_CONTENT=$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null)
+  if echo "$PANE_CONTENT" | grep -q "local development\|dangerously-load-development"; then
+    tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
+    break
+  fi
+done
 
-# Wait for effort level prompt and select medium (option 1) if it appears
-sleep 5
-PANE_CONTENT=$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null)
-if echo "$PANE_CONTENT" | grep -q "medium effort"; then
-  tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
-  sleep 2
-fi
+# Wait for effort level prompt and select medium if it appears
+for i in $(seq 1 15); do
+  sleep 1
+  PANE_CONTENT=$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null)
+  if echo "$PANE_CONTENT" | grep -q "medium effort\|effort level"; then
+    tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
+    break
+  fi
+  # Session is ready if we see the input prompt
+  if echo "$PANE_CONTENT" | grep -q "for shortcuts\|❯"; then
+    break
+  fi
+done
 
 # Verify session is running
 if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
