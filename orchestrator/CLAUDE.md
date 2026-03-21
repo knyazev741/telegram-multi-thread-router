@@ -79,16 +79,23 @@ curl -s "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
 ```
 
 ### Step 3: Launch Claude Code session on target server
+
+start-session.sh args: `<thread_id> [workdir] [session_name] [model]`
+- model defaults to `opus` if not specified
+- available models: `opus`, `sonnet`, `haiku`
+
 ```bash
 # If target is this server (personal-server):
-cd /root/<repo> && nohup /root/telegram-multi-thread-router/scripts/start-session.sh <thread_id> /root/<repo> > /tmp/session-<thread_id>.log 2>&1 &
+cd /root/<repo> && nohup /root/telegram-multi-thread-router/scripts/start-session.sh <thread_id> /root/<repo> tg-<thread_id> <model> > /tmp/session-<thread_id>.log 2>&1 &
 
 # If target is business-server:
-ssh business-server-full "cd /root/<repo> && nohup /root/telegram-multi-thread-router/scripts/start-session.sh <thread_id> /root/<repo> > /tmp/session-<thread_id>.log 2>&1 &"
+ssh business-server-full "cd /root/<repo> && nohup /root/telegram-multi-thread-router/scripts/start-session.sh <thread_id> /root/<repo> tg-<thread_id> <model> > /tmp/session-<thread_id>.log 2>&1 &"
 
 # If target is mac:
-ssh mac "cd /Users/knyaz/<repo> && nohup /Users/knyaz/Telegram\ Multi-Thread\ Router/scripts/start-session.sh <thread_id> /Users/knyaz/<repo> > /tmp/session-<thread_id>.log 2>&1 &"
+ssh mac "cd /Users/knyaz/<repo> && nohup /Users/knyaz/Telegram\ Multi-Thread\ Router/scripts/start-session.sh <thread_id> /Users/knyaz/<repo> tg-<thread_id> <model> > /tmp/session-<thread_id>.log 2>&1 &"
 ```
+
+Default model is **opus**. If user asks for a different model (e.g. "запусти на sonnet"), pass it as 4th argument.
 
 ### Step 4: Confirm to user
 Reply with the topic name, thread_id, and that the session is starting.

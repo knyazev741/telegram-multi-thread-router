@@ -1,13 +1,19 @@
 #!/bin/bash
 # Start a Claude Code session bound to a specific thread in tmux
-# Usage: ./start-session.sh <thread_id> [workdir] [session_name]
+# Usage: ./start-session.sh <thread_id> [workdir] [session_name] [model]
 #
 # The session runs in tmux and survives SSH disconnects.
 # Auto-confirms the development channels prompt.
 
+# Ensure common tool paths are available (needed for non-interactive SSH on macOS)
+for dir in /opt/homebrew/bin "$HOME/.local/bin"; do
+  [ -d "$dir" ] && export PATH="$dir:$PATH"
+done
+
 THREAD_ID="$1"
 WORKDIR="${2:-.}"
 SESSION_NAME="${3:-tg-$THREAD_ID}"
+MODEL="${4:-opus}"
 PLUGIN_NAME="${PLUGIN_NAME:-telegram-multi@knyaz-private}"
 
 if [ -z "$THREAD_ID" ]; then
@@ -25,16 +31,17 @@ tmux kill-session -t "$SESSION_NAME" 2>/dev/null
 echo "Starting Claude Code session:"
 echo "  Thread:    $THREAD_ID"
 echo "  Directory: $WORKDIR"
+echo "  Model:     $MODEL"
 echo "  tmux:      $SESSION_NAME"
 echo "  Plugin:    $PLUGIN_NAME"
 
 # Build claude command (--dangerously-skip-permissions not allowed as root)
-CLAUDE_CMD="TELEGRAM_THREAD_ID=$THREAD_ID claude --dangerously-load-development-channels plugin:$PLUGIN_NAME"
+CLAUDE_CMD="export PATH='$PATH' && TELEGRAM_THREAD_ID=$THREAD_ID claude --model $MODEL --dangerously-load-development-channels plugin:$PLUGIN_NAME"
 if [ "$(id -u)" -ne 0 ]; then
   CLAUDE_CMD="$CLAUDE_CMD --dangerously-skip-permissions"
 fi
 
-# Start in tmux
+# Start in tmux (pass full PATH so child processes like bun are found)
 tmux new-session -d -s "$SESSION_NAME" -c "$WORKDIR" "$CLAUDE_CMD"
 
 # Wait for the development channels confirmation prompt and auto-confirm

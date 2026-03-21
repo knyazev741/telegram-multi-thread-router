@@ -37,4 +37,4 @@ echo "Starting orchestrator session (thread_id=$THREAD_ID)..."
 echo "ORCHESTRATOR_THREAD_ID=$THREAD_ID" >> "$REPO_DIR/.env" 2>/dev/null || true
 
 cd "$REPO_DIR/orchestrator"
-exec "$SCRIPT_DIR/start-session.sh" "$THREAD_ID" "$REPO_DIR/orchestrator"
+exec "$SCRIPT_DIR/start-session.sh" "$THREAD_ID" "$REPO_DIR/orchestrator" "tg-$THREAD_ID" "sonnet"
