@@ -5,15 +5,9 @@ import type { IPCServer } from './ipc-server.js'
 const ICON_COLORS = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
 let colorIndex = 0
 
-export function launchCommands(threadId: number | string, publicHost: string, pluginName: string = 'telegram-multi@telegram-multi-thread'): string {
-  const claudeCmd = `claude --dangerously-load-development-channels plugin:${pluginName} --dangerously-skip-permissions`
-  let msg = '🖥 <b>На сервере:</b>\n'
-  msg += `<pre>TELEGRAM_THREAD_ID=${threadId} ${claudeCmd}</pre>`
-  if (publicHost) {
-    msg += '\n\n💻 <b>Локально:</b>\n'
-    msg += `<pre>TELEGRAM_THREAD_ID=${threadId} TELEGRAM_PROXY_HOST=${publicHost} ${claudeCmd}</pre>`
-  }
-  return msg
+export function launchCommands(threadId: number | string, _publicHost: string, pluginName: string = 'telegram-multi@telegram-multi-thread'): string {
+  const cmd = `TELEGRAM_THREAD_ID=${threadId} claude --dangerously-load-development-channels plugin:${pluginName} --dangerously-skip-permissions`
+  return `<pre>${cmd}</pre>`
 }
 
 export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IPCServer, publicHost: string = '', pluginName: string = 'telegram-multi@telegram-multi-thread') {
