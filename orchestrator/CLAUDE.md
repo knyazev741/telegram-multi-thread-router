@@ -65,7 +65,17 @@ Extract `message_thread_id` from response.
 curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
   -d chat_id=${OWNER_USER_ID} \
   -d message_thread_id=<thread_id> \
-  -d "text=Сессия запускается..."
+  -d "text=⏳ Сессия запускается..."
+```
+Save the returned `message_id` — you will edit this message in Step 4.
+
+### Step 2.5: Update initial message when session is ready
+After launching the session (Step 3), wait ~10 seconds for it to connect, then edit the initial message:
+```bash
+curl -s "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+  -d chat_id=${OWNER_USER_ID} \
+  -d message_id=<saved_message_id> \
+  -d "text=✅ Сессия запущена"
 ```
 
 ### Step 3: Launch Claude Code session on target server
