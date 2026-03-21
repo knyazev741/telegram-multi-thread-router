@@ -254,11 +254,11 @@ const mcp = new Server(
       'Action: FIRST send a short acknowledgement so the user knows you started, THEN do the work, THEN send the final result.',
       '',
       'Example — user asks "обнови зависимости и задеплой":',
-      '1. reply({ chat_id, text: "Понял, обновляю зависимости и деплою — отпишусь когда будет готово." })',
+      '1. reply({ chat_id, text: "Понял, обновляю зависимости и деплою." })',
       '2. ... run npm update, commit, push, deploy ...',
       '3. reply({ chat_id, text: "Готово. Обновил X, Y, Z. Задеплоил, сервис работает." })',
       '',
-      'The acknowledgement must be SHORT (1 sentence). Never skip it for multi-step tasks — the user needs to know you received the request and started working.',
+      'The acknowledgement must be SHORT (1 sentence) and factual — just state what you are doing. No filler like "секунду", "одну минутку", "подождите". Never skip it for multi-step tasks — the user needs to know you received the request and started working.',
     ].join('\n'),
   },
 )
