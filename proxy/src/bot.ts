@@ -143,48 +143,43 @@ export async function startBot(
       incoming.text = incoming.caption || `(document: ${ctx.message.document.file_name})`
     }
 
-    // Handle voice messages — download immediately, transcribe in background
+    // Handle voice messages — transcribe in background, don't block other threads
     if (ctx.message.voice) {
       try {
         const localPath = await downloadFile(bot, ctx.message.voice.file_id, ctx.message.message_id, 'voice.ogg')
-        incoming.voice = {
+        const voiceData = {
           file_id: ctx.message.voice.file_id,
           file_path: localPath,
           duration: ctx.message.voice.duration,
         }
 
-        // Send message immediately with placeholder, transcribe in background
-        incoming.text = '(голосовое сообщение, транскрибируется...)'
-
-        const sent = ipc.sendToSession(threadId, { type: 'incoming_message', message: incoming })
-        console.log(`[Bot] sendToSession thread=${threadId} (voice, pending transcription): ${sent ? 'OK' : 'FAILED'}`)
-
-        // 👀 = delivered to Claude session
-        bot.api.setMessageReaction(chatId, ctx.message.message_id, [
-          { type: 'emoji', emoji: '👀' as any },
-        ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
-
-        // Transcribe in background — send update when done
+        // Transcribe in background — only send to session when transcription is ready
         console.log(`[Bot] Transcribing voice message (${ctx.message.voice.duration}s) in background...`)
         transcribeAudio(localPath, ctx.message.voice.duration).then(transcription => {
           console.log(`[Bot] Transcription: "${transcription.slice(0, 100)}"`)
-          const update: IncomingMessage = {
+          stopTyping(threadId)
+          const msg: IncomingMessage = {
             ...incoming,
             text: transcription || '(voice message, transcription failed)',
-            voice: { ...incoming.voice!, transcription },
+            voice: { ...voiceData, transcription },
           }
-          ipc.sendToSession(threadId, { type: 'incoming_message', message: update })
+          const sent = ipc.sendToSession(threadId, { type: 'incoming_message', message: msg })
+          console.log(`[Bot] sendToSession thread=${threadId} (transcribed voice): ${sent ? 'OK' : 'FAILED'}`)
+          bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+            { type: 'emoji', emoji: '👀' as any },
+          ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
         }).catch(err => {
           console.error('[Bot] Transcription failed:', err.message)
-          const update: IncomingMessage = {
+          stopTyping(threadId)
+          const msg: IncomingMessage = {
             ...incoming,
             text: '(voice message, transcription failed)',
+            voice: voiceData,
           }
-          ipc.sendToSession(threadId, { type: 'incoming_message', message: update })
+          ipc.sendToSession(threadId, { type: 'incoming_message', message: msg })
         })
 
-        stopTyping(threadId)
-        return // Already handled — skip the common send below
+        return // Handled asynchronously — skip the common send below
       } catch (err: any) {
         console.error('[Bot] Voice download failed:', err.message)
         incoming.text = '(voice message, download failed)'
