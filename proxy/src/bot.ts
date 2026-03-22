@@ -1,5 +1,8 @@
 import { Bot, InputFile } from 'grammy'
 import { execFile, exec } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { TopicsRegistry } from './topics-registry.js'
@@ -7,6 +10,7 @@ import type { IPCServer } from './ipc-server.js'
 import { createCommandHandler, launchCommands } from './commands.js'
 import { downloadFile } from './file-handler.js'
 import type { SessionToProxy, IncomingMessage } from './types.js'
+import { ChatHistory } from './chat-history.js'
 
 // Claude slash commands that should be forwarded directly to tmux (no AI processing)
 const TERMINAL_COMMANDS = ['/clear', '/compact', '/reset', '/doctor', '/logout']
@@ -56,9 +60,33 @@ export async function startBot(
   ipc: IPCServer,
   publicHost: string = '',
   pluginName: string = 'telegram-multi@telegram-multi-thread',
+  groupChatId?: number,
+  groupThreadId: number = 1,
+  dataDir: string = './data',
 ): Promise<Bot> {
   const bot = new Bot(token)
   const handleCommand = createCommandHandler(bot, registry, ipc, publicHost, pluginName)
+
+  // Persistent chat history (SQLite)
+  const chatHistory = new ChatHistory(dataDir)
+
+  // Map IPC thread → tmux session name (populated on session registration)
+  const tmuxSessionNames = new Map<number, string>()
+  // Default: group chat session
+  tmuxSessionNames.set(groupThreadId, 'ks-agent')
+
+  // Forward slash-command directly to tmux session (no AI involved)
+  async function forwardCommand(tmuxSession: string, command: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      // Check tmux session exists
+      await execAsync(`tmux has-session -t ${tmuxSession}`)
+      // Send the command as keystrokes
+      await execAsync(`tmux send-keys -t ${tmuxSession} ${JSON.stringify(command)} Enter`)
+      return { ok: true }
+    } catch (err: any) {
+      return { ok: false, error: err.message }
+    }
+  }
 
   // Typing indicators per thread — cleared when session responds
   const typingIntervals = new Map<number, ReturnType<typeof setInterval>>()
@@ -90,6 +118,201 @@ export async function startBot(
 
     console.log(`[Bot] Message from userId=${userId}, chatId=${chatId}, threadId=${threadId}, text="${(ctx.message.text || '').slice(0, 50)}"`)
 
+    // Group chat mode: handle messages from the configured group
+    if (groupChatId && chatId === groupChatId) {
+      const botUsername = bot.botInfo.username
+      const text = ctx.message.text || ctx.message.caption || ''
+      const fromName = ctx.from?.username || ctx.from?.first_name || `user${userId}`
+
+      // Save ALL messages to persistent DB (before filtering)
+      chatHistory.save({
+        chat_id: chatId,
+        message_id: ctx.message.message_id,
+        thread_id: threadId,
+        user_id: userId!,
+        username: ctx.from?.username,
+        first_name: ctx.from?.first_name || '',
+        text,
+        has_photo: !!(ctx.message.photo && ctx.message.photo.length > 0),
+        has_document: !!ctx.message.document,
+        has_voice: !!(ctx.message.voice || (ctx.message as any).video_note),
+      })
+
+      // Background-transcribe voice/video_note for ALL messages (updates DB)
+      if (ctx.message.voice || (ctx.message as any).video_note) {
+        const media = ctx.message.voice || (ctx.message as any).video_note
+        const msgId = ctx.message.message_id
+        const label = ctx.message.voice ? 'голосовое' : 'кружочек'
+        const ext = ctx.message.voice ? 'voice.ogg' : 'video_note.mp4'
+        downloadFile(bot, media.file_id, msgId, ext)
+          .then(localPath => transcribeAudio(localPath, media.duration))
+          .then(transcription => {
+            chatHistory.updateText(chatId, msgId, `[${label}] ${transcription}`)
+          })
+          .catch(err => console.error(`[Bot] Background ${label} transcription failed:`, err.message))
+      }
+
+      // Slash-commands from owner → forward to tmux session directly (no AI)
+      if (userId === ownerId && text.startsWith('/')) {
+        const parts = text.split(/\s+/)
+        const cmd = parts[0] // e.g. /clear, /compact
+
+        // Skip Telegram's built-in commands like /start@bot
+        if (cmd.includes('@') && !cmd.includes(`@${botUsername}`)) return
+        const cleanCmd = cmd.replace(`@${botUsername}`, '')
+
+        // Determine target tmux session
+        let targetSession = tmuxSessionNames.get(groupThreadId) || 'ks-agent'
+        let targetThreadId: number | undefined
+
+        // Check if second arg is a thread_id: /clear 12345
+        if (parts.length > 1 && /^\d+$/.test(parts[1])) {
+          targetThreadId = Number(parts[1])
+          targetSession = tmuxSessionNames.get(targetThreadId) || `tg-${targetThreadId}`
+        }
+
+        // Build the command to send (slash command + remaining args, minus thread_id if it was routing)
+        const cmdArgs = targetThreadId
+          ? parts.slice(2).join(' ')
+          : parts.slice(1).join(' ')
+        const fullCmd = cmdArgs ? `${cleanCmd} ${cmdArgs}` : cleanCmd
+
+        console.log(`[Bot] Command ${fullCmd} → tmux:${targetSession}`)
+        const result = await forwardCommand(targetSession, fullCmd)
+
+        const emoji = result.ok ? '👌' : '❌'
+        await bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+          { type: 'emoji', emoji: emoji as any },
+        ]).catch(() => {})
+
+        if (!result.ok) {
+          await bot.api.sendMessage(chatId, `❌ Не удалось: ${result.error}`, {
+            message_thread_id: threadId,
+            reply_parameters: { message_id: ctx.message.message_id },
+          }).catch(() => {})
+        }
+        return
+      }
+
+      // Check if bot is @mentioned or message is a reply to bot
+      const isMentioned = botUsername && text.includes(`@${botUsername}`)
+      const replyFromId = ctx.message.reply_to_message?.from?.id
+      const isReplyToBot = replyFromId === bot.botInfo.id
+
+      console.log(`[Bot] Group check: mentioned=${!!isMentioned}, replyToBot=${isReplyToBot} (replyFrom=${replyFromId}, botId=${bot.botInfo.id})`)
+
+      if (!isMentioned && !isReplyToBot) return // Ignore messages not directed at bot
+
+      // Single session serves entire group chat (thread=groupThreadId for IPC routing)
+      const ipcThread = groupThreadId
+      if (!registry.has(ipcThread)) {
+        registry.add(ipcThread, 'group-chat')
+      }
+
+      const session = ipc.getSession(ipcThread)
+      if (!session) {
+        console.log(`[Bot] No session for group (ipc thread=${ipcThread})`)
+        return // Silently ignore if no session — don't spam the group
+      }
+
+      startTyping(chatId, threadId || 0)
+
+      // Build message, include reply context if present
+      let messageText = text.replace(`@${botUsername}`, '').trim()
+      let replyPhoto: { file_id: string; file_path?: string } | undefined
+      if (ctx.message.reply_to_message) {
+        const reply = ctx.message.reply_to_message as any
+        const replyFrom = reply.from?.username || reply.from?.first_name || 'unknown'
+        const replyText = reply.text || reply.caption || ''
+        if (replyText) {
+          messageText = `[реплай на сообщение от ${replyFrom}: "${replyText.slice(0, 500)}"]\n\n${messageText}`
+        }
+        // Download photo from the replied message
+        if (reply.photo && reply.photo.length > 0) {
+          const best = reply.photo[reply.photo.length - 1]
+          try {
+            const localPath = await downloadFile(bot, best.file_id, reply.message_id)
+            replyPhoto = { file_id: best.file_id, file_path: localPath }
+            if (!replyText) {
+              messageText = `[реплай на фото от ${replyFrom}]\n\n${messageText}`
+            }
+          } catch (err: any) {
+            console.error('[Bot] Reply photo download failed:', err.message)
+          }
+        }
+      }
+
+      const incoming: IncomingMessage = {
+        message_id: ctx.message.message_id,
+        thread_id: ipcThread, // route through single IPC session
+        chat_id: String(chatId),
+        text: messageText,
+        from: {
+          id: ctx.from!.id,
+          first_name: ctx.from!.first_name,
+          username: ctx.from!.username,
+        },
+        recent_messages: chatHistory.getRecent(chatId, 15).reverse().map(m => ({
+          from: m.username || m.first_name,
+          text: m.text,
+          ts: m.ts,
+        })),
+        reply_thread_id: threadId, // actual Telegram thread to reply in
+        photo: replyPhoto, // photo from replied message (if any)
+      }
+
+      // Handle photos in the message itself (overrides reply photo)
+      if (ctx.message.photo && ctx.message.photo.length > 0) {
+        const best = ctx.message.photo[ctx.message.photo.length - 1]
+        try {
+          const localPath = await downloadFile(bot, best.file_id, ctx.message.message_id)
+          incoming.photo = { file_id: best.file_id, file_path: localPath }
+        } catch (err: any) {
+          console.error('[Bot] Photo download failed:', err.message)
+        }
+        incoming.text = messageText || incoming.caption || '(photo)'
+      }
+
+      // Handle voice in group
+      if (ctx.message.voice) {
+        try {
+          const localPath = await downloadFile(bot, ctx.message.voice.file_id, ctx.message.message_id, 'voice.ogg')
+          console.log(`[Bot] Transcribing group voice (${ctx.message.voice.duration}s)...`)
+          const transcription = await transcribeAudio(localPath, ctx.message.voice.duration)
+          incoming.text = transcription || '(voice, transcription failed)'
+          incoming.voice = { file_id: ctx.message.voice.file_id, file_path: localPath, duration: ctx.message.voice.duration, transcription }
+          // Update DB with transcription text
+          chatHistory.updateText(chatId, ctx.message.message_id, `[голосовое] ${transcription}`)
+        } catch (err: any) {
+          console.error('[Bot] Voice processing failed:', err.message)
+          incoming.text = '(voice message, processing failed)'
+        }
+      }
+
+      // Handle video notes (кружочки) in group
+      if ((ctx.message as any).video_note) {
+        const videoNote = (ctx.message as any).video_note
+        try {
+          const localPath = await downloadFile(bot, videoNote.file_id, ctx.message.message_id, 'video_note.mp4')
+          console.log(`[Bot] Transcribing group video note (${videoNote.duration}s)...`)
+          const transcription = await transcribeAudio(localPath, videoNote.duration)
+          incoming.text = transcription || '(video note, transcription failed)'
+          incoming.voice = { file_id: videoNote.file_id, file_path: localPath, duration: videoNote.duration, transcription }
+          chatHistory.updateText(chatId, ctx.message.message_id, `[кружочек] ${transcription}`)
+        } catch (err: any) {
+          console.error('[Bot] Video note processing failed:', err.message)
+          incoming.text = '(video note, processing failed)'
+        }
+      }
+
+      const sent = ipc.sendToSession(ipcThread, { type: 'incoming_message', message: incoming })
+      console.log(`[Bot] Group message → session (telegram thread=${threadId}): ${sent ? 'OK' : 'FAILED'}`)
+      stopTyping(threadId || 0)
+      return
+    }
+
+    // === Private chat mode (original behavior) ===
+
     // Access control: only owner
     if (userId !== ownerId) return
 
@@ -104,22 +327,23 @@ export async function startBot(
       registry.add(threadId, topicName || `Topic ${threadId}`)
     }
 
-    // Terminal command passthrough — send directly to tmux, no AI
-    const text = ctx.message.text || ''
-    const termCmd = TERMINAL_COMMANDS.find(c => text === c || text.startsWith(c + ' '))
+    // Terminal commands in topics → forward directly to tmux (server-aware, no AI)
+    const topicText = ctx.message.text || ''
+    const termCmd = TERMINAL_COMMANDS.find(c => topicText === c || topicText.startsWith(c + ' '))
     if (termCmd) {
       const topic = registry.get(threadId)
       const sessionName = `tg-${threadId}`
+      console.log(`[Bot] Terminal command "${topicText}" → tmux:${sessionName} (${topic?.server})`)
       try {
-        await sendToTmux(topic?.server, sessionName, text)
-        await ctx.reply(`✅ Команда <code>${text}</code> отправлена в tmux-сессию`, {
-          message_thread_id: threadId, parse_mode: 'HTML',
-        })
-        console.log(`[Bot] Terminal command "${text}" sent to tmux ${sessionName} (${topic?.server})`)
+        await sendToTmux(topic?.server, sessionName, topicText)
+        await bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+          { type: 'emoji', emoji: '👌' as any },
+        ]).catch(() => {})
       } catch (err: any) {
-        await ctx.reply(`❌ Не удалось отправить команду: ${err.message}`, {
-          message_thread_id: threadId,
-        })
+        await bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+          { type: 'emoji', emoji: '❌' as any },
+        ]).catch(() => {})
+        await ctx.reply(`❌ ${err.message}`, { message_thread_id: threadId })
       }
       return
     }
@@ -262,6 +486,17 @@ export async function startBot(
     try {
       switch (msg.type) {
         case 'send_message': {
+          // Record bot's own message in persistent history
+          if (groupChatId && String(groupChatId) === msg.chat_id) {
+            chatHistory.save({
+              chat_id: groupChatId,
+              message_id: Date.now(), // placeholder, will be replaced if we get the real ID
+              user_id: bot.botInfo.id,
+              username: bot.botInfo.username || 'bot',
+              first_name: bot.botInfo.first_name || 'Bot',
+              text: msg.text,
+            })
+          }
           const htmlText = mdToHtml(msg.text)
           const chunks = chunkText(htmlText, 4096)
           for (let i = 0; i < chunks.length; i++) {
