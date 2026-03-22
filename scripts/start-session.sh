@@ -6,7 +6,7 @@
 # Auto-confirms the development channels prompt.
 
 # Ensure common tool paths are available (needed for non-interactive SSH on macOS)
-for dir in /opt/homebrew/bin "$HOME/.local/bin"; do
+for dir in /opt/homebrew/bin "$HOME/.local/bin" "$HOME/.bun/bin"; do
   [ -d "$dir" ] && export PATH="$dir:$PATH"
 done
 
