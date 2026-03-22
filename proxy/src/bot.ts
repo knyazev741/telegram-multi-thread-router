@@ -118,8 +118,10 @@ export async function startBot(
 
     console.log(`[Bot] Message from userId=${userId}, chatId=${chatId}, threadId=${threadId}, text="${(ctx.message.text || '').slice(0, 50)}"`)
 
-    // Group chat mode: handle messages from the configured group
-    if (groupChatId && chatId === groupChatId) {
+    // Only respond in the configured group chat, ignore everything else
+    if (!groupChatId || chatId !== groupChatId) return
+
+    {
       const botUsername = bot.botInfo.username
       const text = ctx.message.text || ctx.message.caption || ''
       const fromName = ctx.from?.username || ctx.from?.first_name || `user${userId}`
@@ -315,160 +317,7 @@ export async function startBot(
         ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
       }
       stopTyping(threadId || 0)
-      return
     }
-
-    // === Private chat mode (original behavior) ===
-
-    // Access control: only owner
-    if (userId !== ownerId) return
-
-    // General topic → management commands only
-    if (!threadId || threadId === 1) {
-      return handleCommand(ctx)
-    }
-
-    // Auto-register unknown topics
-    if (!registry.has(threadId)) {
-      const topicName = (ctx.message as any).forum_topic_created?.name
-      registry.add(threadId, topicName || `Topic ${threadId}`)
-    }
-
-    // Terminal commands in topics → forward directly to tmux (server-aware, no AI)
-    const topicText = ctx.message.text || ''
-    const termCmd = TERMINAL_COMMANDS.find(c => topicText === c || topicText.startsWith(c + ' '))
-    if (termCmd) {
-      const topic = registry.get(threadId)
-      const sessionName = `tg-${threadId}`
-      console.log(`[Bot] Terminal command "${topicText}" → tmux:${sessionName} (${topic?.server})`)
-      try {
-        await sendToTmux(topic?.server, sessionName, topicText)
-        await bot.api.setMessageReaction(chatId, ctx.message.message_id, [
-          { type: 'emoji', emoji: '👌' as any },
-        ]).catch(() => {})
-      } catch (err: any) {
-        await bot.api.setMessageReaction(chatId, ctx.message.message_id, [
-          { type: 'emoji', emoji: '❌' as any },
-        ]).catch(() => {})
-        await ctx.reply(`❌ ${err.message}`, { message_thread_id: threadId })
-      }
-      return
-    }
-
-    // Find connected session
-    const session = ipc.getSession(threadId)
-    const allSessions = ipc.getConnectedSessions()
-    console.log(`[Bot] Looking for thread=${threadId}, connected sessions: ${JSON.stringify(allSessions.map(s => s.threadId))}`)
-
-    if (!session) {
-      await ctx.reply(
-        '⚠️ Нет подключённой сессии для этого топика.\n\n' +
-        launchCommands(threadId, publicHost, pluginName),
-        { message_thread_id: threadId, parse_mode: 'HTML' },
-      )
-      return
-    }
-
-    // Start typing while we process (transcription etc.)
-    startTyping(chatId, threadId)
-
-    // Build incoming message
-    const incoming: IncomingMessage = {
-      message_id: ctx.message.message_id,
-      thread_id: threadId,
-      chat_id: String(chatId),
-      text: ctx.message.text || '',
-      caption: (ctx.message as any).caption,
-      from: {
-        id: ctx.from!.id,
-        first_name: ctx.from!.first_name,
-        username: ctx.from!.username,
-      },
-    }
-
-    // Handle photos
-    if (ctx.message.photo && ctx.message.photo.length > 0) {
-      const best = ctx.message.photo[ctx.message.photo.length - 1]
-      try {
-        const localPath = await downloadFile(bot, best.file_id, ctx.message.message_id)
-        incoming.photo = { file_id: best.file_id, file_path: localPath }
-      } catch (err: any) {
-        console.error('[Bot] Photo download failed:', err.message)
-      }
-      incoming.text = incoming.caption || '(photo)'
-    }
-
-    // Handle documents
-    if (ctx.message.document) {
-      try {
-        const localPath = await downloadFile(
-          bot,
-          ctx.message.document.file_id,
-          ctx.message.message_id,
-          ctx.message.document.file_name,
-        )
-        incoming.document = {
-          file_id: ctx.message.document.file_id,
-          file_name: ctx.message.document.file_name || 'file',
-          file_path: localPath,
-        }
-      } catch (err: any) {
-        console.error('[Bot] Document download failed:', err.message)
-      }
-      incoming.text = incoming.caption || `(document: ${ctx.message.document.file_name})`
-    }
-
-    // Handle voice messages — transcribe in background, don't block other threads
-    if (ctx.message.voice) {
-      try {
-        const localPath = await downloadFile(bot, ctx.message.voice.file_id, ctx.message.message_id, 'voice.ogg')
-        const voiceData = {
-          file_id: ctx.message.voice.file_id,
-          file_path: localPath,
-          duration: ctx.message.voice.duration,
-        }
-
-        // Transcribe in background — only send to session when transcription is ready
-        console.log(`[Bot] Transcribing voice message (${ctx.message.voice.duration}s) in background...`)
-        transcribeAudio(localPath, ctx.message.voice.duration).then(transcription => {
-          console.log(`[Bot] Transcription: "${transcription.slice(0, 100)}"`)
-          stopTyping(threadId)
-          const msg: IncomingMessage = {
-            ...incoming,
-            text: transcription || '(voice message, transcription failed)',
-            voice: { ...voiceData, transcription },
-          }
-          const sent = ipc.sendToSession(threadId, { type: 'incoming_message', message: msg })
-          console.log(`[Bot] sendToSession thread=${threadId} (transcribed voice): ${sent ? 'OK' : 'FAILED'}`)
-          bot.api.setMessageReaction(chatId, ctx.message.message_id, [
-            { type: 'emoji', emoji: '👀' as any },
-          ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
-        }).catch(err => {
-          console.error('[Bot] Transcription failed:', err.message)
-          stopTyping(threadId)
-          const msg: IncomingMessage = {
-            ...incoming,
-            text: '(voice message, transcription failed)',
-            voice: voiceData,
-          }
-          ipc.sendToSession(threadId, { type: 'incoming_message', message: msg })
-        })
-
-        return // Handled asynchronously — skip the common send below
-      } catch (err: any) {
-        console.error('[Bot] Voice download failed:', err.message)
-        incoming.text = '(voice message, download failed)'
-      }
-    }
-
-    // Forward to session via IPC
-    const sent = ipc.sendToSession(threadId, { type: 'incoming_message', message: incoming })
-    console.log(`[Bot] sendToSession thread=${threadId}: ${sent ? 'OK' : 'FAILED'}`)
-
-    // 👀 = delivered to Claude session (after sendToSession, not before)
-    bot.api.setMessageReaction(chatId, ctx.message.message_id, [
-      { type: 'emoji', emoji: '👀' as any },
-    ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
   })
 
   // Notify thread when session connects
