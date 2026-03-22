@@ -38,6 +38,39 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
         break
       }
 
+      case '/close': {
+        const threadId = parseInt(args[1])
+        if (!threadId) {
+          await ctx.reply('Использование: /close <thread_id>')
+          break
+        }
+
+        const results: string[] = []
+
+        // 1. Disconnect IPC session if connected
+        const disconnected = ipc.closeSession(threadId)
+        if (disconnected) results.push('🔌 IPC-сессия отключена')
+
+        // 2. Delete Telegram topic
+        try {
+          await bot.api.deleteForumTopic(ctx.chat!.id, threadId)
+          results.push('🗑 Топик удалён')
+        } catch (err: any) {
+          results.push(`⚠️ Топик: ${err.message}`)
+        }
+
+        // 3. Remove from registry
+        const name = registry.getName(threadId) || String(threadId)
+        registry.remove(threadId)
+        results.push('📋 Реестр очищен')
+
+        await ctx.reply(
+          `✅ Тред <b>${name}</b> (${threadId}) закрыт:\n` + results.map(r => `• ${r}`).join('\n'),
+          { message_thread_id: 1, parse_mode: 'HTML' },
+        )
+        break
+      }
+
       case '/list': {
         const topics = registry.getAll()
         if (topics.length === 0) {
@@ -80,6 +113,7 @@ export function createCommandHandler(bot: Bot, registry: TopicsRegistry, ipc: IP
           '/new &lt;название&gt; — создать новый топик\n' +
           '/list — показать все топики и статус сессий\n' +
           '/sessions — показать активные сессии\n' +
+          '/close &lt;thread_id&gt; — закрыть тред и сессию\n' +
           '/help — это сообщение\n\n' +
           '<b>Запуск сессии:</b>\n\n' +
           launchCommands('&lt;id&gt;', publicHost, pluginName),

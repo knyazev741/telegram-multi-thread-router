@@ -25,11 +25,22 @@ export class TopicsRegistry {
     writeFileSync(this.filePath, JSON.stringify(this.topics, null, 2))
   }
 
-  add(threadId: number, name: string) {
+  add(threadId: number, name: string, meta?: { server?: TopicEntry['server']; workdir?: string; sessionId?: string }) {
     // Don't duplicate
     if (this.topics.some(t => t.threadId === threadId)) return
-    this.topics.push({ threadId, name, createdAt: new Date().toISOString() })
+    this.topics.push({ threadId, name, createdAt: new Date().toISOString(), ...meta })
     this.save()
+  }
+
+  updateMeta(threadId: number, meta: { server?: TopicEntry['server']; workdir?: string; sessionId?: string }) {
+    const topic = this.topics.find(t => t.threadId === threadId)
+    if (!topic) return
+    Object.assign(topic, meta)
+    this.save()
+  }
+
+  get(threadId: number): TopicEntry | null {
+    return this.topics.find(t => t.threadId === threadId) ?? null
   }
 
   remove(threadId: number) {

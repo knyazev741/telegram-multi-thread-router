@@ -65,21 +65,25 @@ Extract `message_thread_id` from response.
 
 ### Step 2: Send initial message to make topic visible
 ```bash
-curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+MSG_ID=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
   -d chat_id=${OWNER_USER_ID} \
   -d message_thread_id=<thread_id> \
-  -d "text=⏳ Сессия запускается..."
+  --data-urlencode "text=⏳ Сессия запускается... \`<thread_id>\`" \
+  -d parse_mode=MarkdownV2 | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['message_id'])")
 ```
-Save the returned `message_id` — you will edit this message in Step 4.
+Save `MSG_ID` — you will edit this message in Step 2.5.
 
 ### Step 2.5: Update initial message when session is ready
-After launching the session (Step 3), wait ~10 seconds for it to connect, then edit the initial message:
+After launching the session (Step 3), wait ~10 seconds for it to connect, then edit:
 ```bash
 curl -s "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
   -d chat_id=${OWNER_USER_ID} \
-  -d message_id=<saved_message_id> \
-  -d "text=✅ Сессия запущена"
+  -d message_id=$MSG_ID \
+  --data-urlencode "text=✅ Сессия запущена \`<thread_id>\`" \
+  -d parse_mode=MarkdownV2
 ```
+
+**RULE: thread_id must ALWAYS appear in monospace in session start/restart messages.**
 
 ### Step 3: Launch Claude Code session on target server
 
@@ -100,12 +104,76 @@ ssh mac "cd /Users/knyaz/<repo> && nohup /Users/knyaz/Telegram\ Multi-Thread\ Ro
 
 Default model is **opus**. If user asks for a different model (e.g. "запусти на sonnet"), pass it as 4th argument.
 
-### Step 4: Confirm to user
+### Step 4: Save session metadata to topics.json
+
+After session connects (~10s), get the Claude conversation ID and save metadata:
+
+```bash
+# Get conversation ID (run on the server where session was launched):
+SESSION_ID=$(/root/telegram-multi-thread-router/scripts/get-session-id.sh /root/<repo>)
+# For mac: ssh mac "/Users/knyaz/Telegram\ Multi-Thread\ Router/scripts/get-session-id.sh '/Users/knyaz/<repo>'"
+
+# Update topics.json:
+python3 -c "
+import json
+f = '/root/telegram-multi-thread-router/proxy/data/topics.json'
+data = json.load(open(f))
+for t in data:
+    if t['threadId'] == <thread_id>:
+        t['server'] = '<personal|business|mac>'
+        t['workdir'] = '/root/<repo>'
+        t['sessionId'] = '$SESSION_ID'
+        break
+json.dump(data, open(f,'w'), indent=2)
+print('saved')
+"
+```
+
+### Step 5: Confirm to user
 Reply with the topic name, thread_id, and that the session is starting.
+
+### Restarting a session (when user says "перезапусти", "восстанови" etc.)
+ALWAYS send notifications to the topic thread with thread_id in monospace — even for restarts:
+```bash
+# 1. Send "starting" message and save its ID
+MSG_ID=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+  -d chat_id=${OWNER_USER_ID} \
+  -d message_thread_id=<thread_id> \
+  --data-urlencode "text=⏳ Сессия перезапускается... \`<thread_id>\`" \
+  -d parse_mode=MarkdownV2 | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['message_id'])")
+
+# 2. Launch session (same as Step 3)
+
+# 3. Edit to "ready"
+curl -s "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+  -d chat_id=${OWNER_USER_ID} \
+  -d message_id=$MSG_ID \
+  --data-urlencode "text=✅ Сессия запущена \`<thread_id>\`" \
+  -d parse_mode=MarkdownV2
+```
 
 ---
 
 ## Session Lifecycle Management
+
+### Close a session (kill + delete topic + clean registry)
+When user says "закрой сессию <thread_id>" or "убей тред <thread_id>":
+
+```bash
+# 1. Kill tmux session on the appropriate server
+tmux kill-session -t tg-<thread_id> 2>/dev/null
+# or: ssh business-server-full "tmux kill-session -t tg-<thread_id> 2>/dev/null"
+# or: ssh mac "/opt/homebrew/bin/tmux kill-session -t tg-<thread_id> 2>/dev/null"
+
+# 2. Delete Telegram topic
+source /root/telegram-multi-thread-router/.env
+curl -s "https://api.telegram.org/bot${BOT_TOKEN}/deleteForumTopic" \
+  -d chat_id=${OWNER_USER_ID} \
+  -d message_thread_id=<thread_id>
+
+# 3. Remove from proxy registry
+# Edit /root/telegram-multi-thread-router/proxy/data/topics.json — remove the entry
+```
 
 ### Check if session is alive
 ```bash
@@ -141,5 +209,5 @@ Check all running claude processes with TELEGRAM_THREAD_ID on each server.
 
 - Always use `nohup ... &` when launching sessions so they survive after your command finishes.
 - Bot token and owner user ID are in `/root/telegram-multi-thread-router/.env`.
-- The proxy must be running for sessions to connect. Check with: `ps aux | grep start-proxy`.
-- If a session fails to connect, check proxy logs: `tail -50 /tmp/proxy.log`.
+- The proxy must be running for sessions to connect. Check with: `systemctl status telegram-multi-proxy`.
+- If a session fails to connect, check proxy logs: `journalctl -u telegram-multi-proxy -n 50`.

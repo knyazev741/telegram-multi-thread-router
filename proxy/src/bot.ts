@@ -1,5 +1,5 @@
 import { Bot, InputFile } from 'grammy'
-import { execFile } from 'child_process'
+import { execFile, exec } from 'child_process'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { TopicsRegistry } from './topics-registry.js'
@@ -7,6 +7,30 @@ import type { IPCServer } from './ipc-server.js'
 import { createCommandHandler, launchCommands } from './commands.js'
 import { downloadFile } from './file-handler.js'
 import type { SessionToProxy, IncomingMessage } from './types.js'
+
+// Claude slash commands that should be forwarded directly to tmux (no AI processing)
+const TERMINAL_COMMANDS = ['/clear', '/compact', '/reset', '/doctor', '/logout']
+
+function sendToTmux(server: string | undefined, sessionName: string, keys: string): Promise<void> {
+  const escaped = keys.replace(/'/g, "'\\''")
+  let cmd: string
+  switch (server) {
+    case 'personal':
+      cmd = `tmux send-keys -t '${sessionName}' '${escaped}' Enter`
+      break
+    case 'business':
+      cmd = `ssh business-server-full "tmux send-keys -t '${sessionName}' '${escaped}' Enter"`
+      break
+    case 'mac':
+      cmd = `ssh mac "/opt/homebrew/bin/tmux send-keys -t '${sessionName}' '${escaped}' Enter"`
+      break
+    default:
+      return Promise.reject(new Error(`Нет информации о сервере для этого треда`))
+  }
+  return new Promise((resolve, reject) => {
+    exec(cmd, { timeout: 10000 }, (err) => err ? reject(err) : resolve())
+  })
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TRANSCRIBE_SCRIPT = resolve(__dirname, '../scripts/transcribe.py')
@@ -78,6 +102,26 @@ export async function startBot(
     if (!registry.has(threadId)) {
       const topicName = (ctx.message as any).forum_topic_created?.name
       registry.add(threadId, topicName || `Topic ${threadId}`)
+    }
+
+    // Terminal command passthrough — send directly to tmux, no AI
+    const text = ctx.message.text || ''
+    const termCmd = TERMINAL_COMMANDS.find(c => text === c || text.startsWith(c + ' '))
+    if (termCmd) {
+      const topic = registry.get(threadId)
+      const sessionName = `tg-${threadId}`
+      try {
+        await sendToTmux(topic?.server, sessionName, text)
+        await ctx.reply(`✅ Команда <code>${text}</code> отправлена в tmux-сессию`, {
+          message_thread_id: threadId, parse_mode: 'HTML',
+        })
+        console.log(`[Bot] Terminal command "${text}" sent to tmux ${sessionName} (${topic?.server})`)
+      } catch (err: any) {
+        await ctx.reply(`❌ Не удалось отправить команду: ${err.message}`, {
+          message_thread_id: threadId,
+        })
+      }
+      return
     }
 
     // Find connected session
@@ -194,6 +238,18 @@ export async function startBot(
     bot.api.setMessageReaction(chatId, ctx.message.message_id, [
       { type: 'emoji', emoji: '👀' as any },
     ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
+  })
+
+  // Notify thread when session connects
+  let startupPhase = true
+  setTimeout(() => { startupPhase = false }, 15000) // suppress notifications during initial reconnect burst
+
+  ipc.onRegister((threadId, chatId) => {
+    if (startupPhase) return // skip the batch of reconnects at proxy startup
+    bot.api.sendMessage(chatId, `✅ Сессия подключена \`${threadId}\``, {
+      message_thread_id: threadId,
+      parse_mode: 'MarkdownV2',
+    }).catch(err => console.error(`[Bot] Session connect notify failed:`, err.message))
   })
 
   // Handle outgoing messages from sessions → Telegram

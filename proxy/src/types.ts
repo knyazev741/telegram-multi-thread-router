@@ -33,6 +33,9 @@ export interface TopicEntry {
   threadId: number
   name: string
   createdAt: string
+  server?: 'personal' | 'business' | 'mac'
+  workdir?: string
+  sessionId?: string  // Claude conversation ID for --resume
 }
 
 export interface ConnectedSession {

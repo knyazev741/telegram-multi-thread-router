@@ -6,6 +6,7 @@ export class IPCServer {
   private sessions: Map<number, ConnectedSession> = new Map()
   private server: net.Server
   private outgoingHandler: ((msg: SessionToProxy) => Promise<void>) | null = null
+  private registerHandler: ((threadId: number, chatId: string) => void) | null = null
   private authToken: string
 
   constructor(port: number, authToken: string) {
@@ -84,6 +85,7 @@ export class IPCServer {
         })
         console.log(`[IPC] Session registered: thread=${thread_id}, chat=${chat_id}`)
         this.sendToSocket(socket, { type: 'registered', thread_id, chat_id })
+        if (this.registerHandler) this.registerHandler(thread_id, chat_id)
         break
       }
       case 'send_message':
@@ -125,12 +127,24 @@ export class IPCServer {
     this.outgoingHandler = handler
   }
 
+  onRegister(handler: (threadId: number, chatId: string) => void) {
+    this.registerHandler = handler
+  }
+
   getConnectedSessions(): Array<{ threadId: number; chatId: string; connectedAt: Date }> {
     return Array.from(this.sessions.values()).map(s => ({
       threadId: s.threadId,
       chatId: s.chatId,
       connectedAt: s.connectedAt,
     }))
+  }
+
+  closeSession(threadId: number): boolean {
+    const session = this.sessions.get(threadId)
+    if (!session) return false
+    session.socket.end()
+    this.sessions.delete(threadId)
+    return true
   }
 
   closeAll() {

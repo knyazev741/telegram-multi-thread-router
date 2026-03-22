@@ -45,16 +45,29 @@ fi
 tmux new-session -d -s "$SESSION_NAME" -c "$WORKDIR" "$CLAUDE_CMD"
 
 # Wait for the development channels confirmation prompt and auto-confirm
-sleep 3
-tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
+# Poll until prompt appears (up to 30s) instead of fixed sleep
+for i in $(seq 1 30); do
+  sleep 1
+  PANE_CONTENT=$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null)
+  if echo "$PANE_CONTENT" | grep -q "local development\|dangerously-load-development"; then
+    tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
+    break
+  fi
+done
 
-# Wait for effort level prompt and select medium (option 1) if it appears
-sleep 5
-PANE_CONTENT=$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null)
-if echo "$PANE_CONTENT" | grep -q "medium effort"; then
-  tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
-  sleep 2
-fi
+# Wait for effort level prompt and select medium if it appears
+for i in $(seq 1 15); do
+  sleep 1
+  PANE_CONTENT=$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null)
+  if echo "$PANE_CONTENT" | grep -q "medium effort\|effort level"; then
+    tmux send-keys -t "$SESSION_NAME" Enter 2>/dev/null
+    break
+  fi
+  # Session is ready if we see the input prompt
+  if echo "$PANE_CONTENT" | grep -q "for shortcuts\|❯"; then
+    break
+  fi
+done
 
 # Verify session is running
 if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
