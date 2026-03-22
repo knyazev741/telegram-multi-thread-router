@@ -1,5 +1,8 @@
 import { Bot, InputFile } from 'grammy'
-import { execFile } from 'child_process'
+import { execFile, exec } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import type { TopicsRegistry } from './topics-registry.js'
@@ -42,6 +45,24 @@ export async function startBot(
 
   // Persistent chat history (SQLite)
   const chatHistory = new ChatHistory(dataDir)
+
+  // Map IPC thread → tmux session name (populated on session registration)
+  const tmuxSessionNames = new Map<number, string>()
+  // Default: group chat session
+  tmuxSessionNames.set(groupThreadId, 'ks-agent')
+
+  // Forward slash-command directly to tmux session (no AI involved)
+  async function forwardCommand(tmuxSession: string, command: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      // Check tmux session exists
+      await execAsync(`tmux has-session -t ${tmuxSession}`)
+      // Send the command as keystrokes
+      await execAsync(`tmux send-keys -t ${tmuxSession} ${JSON.stringify(command)} Enter`)
+      return { ok: true }
+    } catch (err: any) {
+      return { ok: false, error: err.message }
+    }
+  }
 
   // Typing indicators per thread — cleared when session responds
   const typingIntervals = new Map<number, ReturnType<typeof setInterval>>()
@@ -105,6 +126,48 @@ export async function startBot(
             chatHistory.updateText(chatId, msgId, `[${label}] ${transcription}`)
           })
           .catch(err => console.error(`[Bot] Background ${label} transcription failed:`, err.message))
+      }
+
+      // Slash-commands from owner → forward to tmux session directly (no AI)
+      if (userId === ownerId && text.startsWith('/')) {
+        const parts = text.split(/\s+/)
+        const cmd = parts[0] // e.g. /clear, /compact
+
+        // Skip Telegram's built-in commands like /start@bot
+        if (cmd.includes('@') && !cmd.includes(`@${botUsername}`)) return
+        const cleanCmd = cmd.replace(`@${botUsername}`, '')
+
+        // Determine target tmux session
+        let targetSession = tmuxSessionNames.get(groupThreadId) || 'ks-agent'
+        let targetThreadId: number | undefined
+
+        // Check if second arg is a thread_id: /clear 12345
+        if (parts.length > 1 && /^\d+$/.test(parts[1])) {
+          targetThreadId = Number(parts[1])
+          targetSession = tmuxSessionNames.get(targetThreadId) || `tg-${targetThreadId}`
+        }
+
+        // Build the command to send (slash command + remaining args, minus thread_id if it was routing)
+        const cmdArgs = targetThreadId
+          ? parts.slice(2).join(' ')
+          : parts.slice(1).join(' ')
+        const fullCmd = cmdArgs ? `${cleanCmd} ${cmdArgs}` : cleanCmd
+
+        console.log(`[Bot] Command ${fullCmd} → tmux:${targetSession}`)
+        const result = await forwardCommand(targetSession, fullCmd)
+
+        const emoji = result.ok ? '👌' : '❌'
+        await bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+          { type: 'emoji', emoji: emoji as any },
+        ]).catch(() => {})
+
+        if (!result.ok) {
+          await bot.api.sendMessage(chatId, `❌ Не удалось: ${result.error}`, {
+            message_thread_id: threadId,
+            reply_parameters: { message_id: ctx.message.message_id },
+          }).catch(() => {})
+        }
+        return
       }
 
       // Check if bot is @mentioned or message is a reply to bot
@@ -235,6 +298,22 @@ export async function startBot(
     if (!registry.has(threadId)) {
       const topicName = (ctx.message as any).forum_topic_created?.name
       registry.add(threadId, topicName || `Topic ${threadId}`)
+    }
+
+    // Slash-commands in topics → forward to tmux session directly
+    const topicText = ctx.message.text || ''
+    if (topicText.startsWith('/')) {
+      const tmuxSession = tmuxSessionNames.get(threadId) || `tg-${threadId}`
+      console.log(`[Bot] Command ${topicText} → tmux:${tmuxSession}`)
+      const result = await forwardCommand(tmuxSession, topicText)
+      const emoji = result.ok ? '👌' : '❌'
+      await bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+        { type: 'emoji', emoji: emoji as any },
+      ]).catch(() => {})
+      if (!result.ok) {
+        await ctx.reply(`❌ ${result.error}`, { message_thread_id: threadId })
+      }
+      return
     }
 
     // Find connected session
