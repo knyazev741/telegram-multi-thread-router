@@ -4,7 +4,7 @@
 import sys
 from faster_whisper import WhisperModel
 
-MODEL_SIZE = "medium"
+MODEL_SIZE = "small"
 model = None
 
 def get_model():

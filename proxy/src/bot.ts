@@ -140,8 +140,10 @@ export async function startBot(
         has_voice: !!(ctx.message.voice || (ctx.message as any).video_note),
       })
 
-      // Background-transcribe voice/video_note for ALL messages (updates DB)
-      if (ctx.message.voice || (ctx.message as any).video_note) {
+      // Background-transcribe voice/video_note for non-bot-directed messages (updates DB)
+      // Bot-directed voice/video_note is transcribed in the session-send path below to avoid double processing
+      const isBotDirected = (botUsername && text.includes(`@${botUsername}`)) || ctx.message.reply_to_message?.from?.id === bot.botInfo.id
+      if ((ctx.message.voice || (ctx.message as any).video_note) && !isBotDirected) {
         const media = ctx.message.voice || (ctx.message as any).video_note
         const msgId = ctx.message.message_id
         const label = ctx.message.voice ? 'голосовое' : 'кружочек'
