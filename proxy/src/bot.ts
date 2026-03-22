@@ -283,6 +283,13 @@ export async function startBot(
 
       const sent = ipc.sendToSession(ipcThread, { type: 'incoming_message', message: incoming })
       console.log(`[Bot] Group message → session (telegram thread=${threadId}): ${sent ? 'OK' : 'FAILED'}`)
+
+      // 👀 = delivered to Claude session
+      if (sent) {
+        bot.api.setMessageReaction(chatId, ctx.message.message_id, [
+          { type: 'emoji', emoji: '👀' as any },
+        ]).catch(err => console.error('[Bot] Reaction failed:', err.message))
+      }
       stopTyping(threadId || 0)
       return
     }
