@@ -172,7 +172,10 @@ export async function startBot(
 
       // Check if bot is @mentioned or message is a reply to bot
       const isMentioned = botUsername && text.includes(`@${botUsername}`)
-      const isReplyToBot = ctx.message.reply_to_message?.from?.id === bot.botInfo.id
+      const replyFromId = ctx.message.reply_to_message?.from?.id
+      const isReplyToBot = replyFromId === bot.botInfo.id
+
+      console.log(`[Bot] Group check: mentioned=${!!isMentioned}, replyToBot=${isReplyToBot} (replyFrom=${replyFromId}, botId=${bot.botInfo.id})`)
 
       if (!isMentioned && !isReplyToBot) return // Ignore messages not directed at bot
 
