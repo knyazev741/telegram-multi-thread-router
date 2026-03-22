@@ -19,6 +19,10 @@ Bot Chat (private, with you)
 - **File support**: Send/receive photos and documents
 - **Remote sessions**: Run Claude Code locally or on a server — both connect to the same proxy
 - **Auto-reconnect**: Sessions reconnect automatically if connection drops
+- **Session notifications**: Proxy automatically sends `✅ Session connected` to the topic when a session registers
+- **Terminal commands**: Send `/clear`, `/compact`, `/reset` in a topic — forwarded to tmux without AI processing
+- **Orchestration**: Run a dedicated Claude Code session that manages all other sessions on demand
+- **Session metadata**: Topics registry tracks server, workdir, and Claude conversation ID per session
 
 ## Architecture
 
@@ -30,6 +34,12 @@ Bot Chat (private, with you)
 ├─────────────┤                 │  - Transcriber   │
 │  (session 2) │◄───────────────►│                  │
 └─────────────┘                 └─────────────────┘
+        ▲
+        │  (optional)
+┌─────────────┐
+│ Orchestrator │  ← Claude Code session that manages other sessions
+│   session    │    Creates topics, launches sessions on demand
+└─────────────┘
 ```
 
 ## Prerequisites
@@ -132,6 +142,8 @@ EOF
 
 If running sessions on the same server as the proxy, `TELEGRAM_PROXY_HOST` defaults to `127.0.0.1`.
 
+> **Mac behind NAT**: If your Mac shares an IP with other machines, multiple sessions will conflict on the proxy. Fix: add `-L 9600:localhost:9600` to your SSH reverse tunnel so Mac sessions connect via `127.0.0.1`. Then set `TELEGRAM_PROXY_HOST=127.0.0.1` in the plugin config.
+
 ### 5. Launch a Session
 
 Open your bot in Telegram. In the **General Topic**, send:
@@ -159,9 +171,23 @@ Now send messages in that topic — Claude will respond!
 | Command | Description |
 |---|---|
 | `/new <name>` | Create a new topic + show launch command |
-| `/list` | Show all topics with connection status (green/red) |
+| `/list` | Show all topics with connection status (🟢/🔴) |
 | `/sessions` | Show active sessions with uptime |
+| `/close <thread_id>` | Kill session, delete topic, clean registry |
 | `/help` | Show help |
+
+### Terminal Commands (in any topic)
+
+Send these directly in a topic — the proxy forwards them to the tmux session without AI processing:
+
+| Command | Effect |
+|---|---|
+| `/clear` | Clear Claude's conversation history |
+| `/compact` | Compact/summarize the conversation |
+| `/reset` | Reset the session |
+| `/doctor` | Run Claude diagnostics |
+
+The proxy reacts with 👌 on success or ❌ on failure.
 
 ### Message Types
 
@@ -176,81 +202,111 @@ Now send messages in that topic — Claude will respond!
 
 - **👀 reaction** on your message = delivered to Claude session
 - **"typing..."** animation = Claude is processing
+- **✅ Session connected** in topic = session just registered with proxy
 - **🟢** in `/list` = session connected
 - **🔴** in `/list` = no active session
 
-### Running Multiple Sessions
+## Orchestration
 
-Use tmux on the server:
+Run a dedicated Claude Code session as an **orchestrator** — it manages all other sessions on demand, across multiple servers.
+
+The orchestrator is just a regular Claude Code session launched in `orchestrator/` with `orchestrator/CLAUDE.md` as its instructions. It can:
+- Create Telegram topics and launch sessions on any server via SSH
+- Monitor session health and restart crashed sessions
+- Close sessions (kill tmux + delete topic + clean registry)
+
+### Setting up the Orchestrator
+
+1. Create a topic for the orchestrator (via `/new Orchestrator` in General Topic)
+2. Customize `orchestrator/CLAUDE.md` with your servers and repos
+3. Launch Claude Code in the `orchestrator/` directory:
 
 ```bash
-# Edit scripts/start-all.sh with your sessions
-SESSIONS=(
-  "42|backend|/home/user/backend"
-  "87|frontend|/home/user/frontend"
-)
-
-./scripts/start-all.sh
+TELEGRAM_THREAD_ID=<thread_id> claude \
+  --dangerously-load-development-channels plugin:telegram-multi@telegram-multi-thread \
+  --dangerously-skip-permissions
 ```
 
-Or launch individually:
+### start-session.sh
+
+The `scripts/start-session.sh` script starts Claude Code in a named tmux session and auto-confirms startup prompts:
 
 ```bash
-./scripts/start-session.sh <thread_id> [working_directory]
+# Usage: start-session.sh <thread_id> [workdir] [session_name] [model]
+./scripts/start-session.sh 42 /path/to/repo my-session opus
+```
+
+### Session Metadata
+
+The proxy tracks metadata for each session in `proxy/data/topics.json`:
+
+```json
+{
+  "threadId": 42,
+  "name": "backend",
+  "server": "remote-server",
+  "workdir": "/root/backend",
+  "sessionId": "uuid-of-claude-conversation"
+}
+```
+
+Use `scripts/get-session-id.sh <workdir>` to find the Claude conversation ID after launch.
+
+## RAM & Swap
+
+If sessions run heavy workloads (e.g. C++ compilation), add swap to prevent OOM kills (exit 137):
+
+```bash
+fallocate -l 8G /swapfile && chmod 600 /swapfile
+mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
 ```
 
 ## Troubleshooting
 
 ### Plugin shows "failed" in `/mcp`
 
-**Cause**: `bun` is not in the system PATH. Claude Code starts the plugin as a subprocess and may not inherit your shell's PATH.
-
+`bun` is not in the system PATH. Fix:
 ```bash
-# Fix: create symlink
 ln -sf ~/.bun/bin/bun /usr/local/bin/bun
 ```
 
 ### `--dangerously-skip-permissions` fails with root
 
-This flag is blocked when running as root for security reasons. Instead, allow tools explicitly in `~/.claude/settings.json`:
+Allow tools explicitly in `~/.claude/settings.json`:
 
 ```json
 {
   "permissions": {
-    "allow": [
-      "Bash", "Read", "Write", "Edit", "Glob", "Grep",
-      "mcp__plugin_telegram-multi_telegram-multi__*"
-    ]
+    "allow": ["Bash", "Read", "Write", "Edit", "Glob", "Grep",
+              "mcp__plugin_telegram-multi_telegram-multi__*"]
   }
 }
 ```
 
 ### Voice transcription is slow
 
-The default model is `medium` (~1.5GB, good accuracy for most languages). Adjust in `proxy/scripts/transcribe.py`:
+Adjust model in `proxy/scripts/transcribe.py`:
 
 | Model | Size | Speed (CPU) | Quality |
 |---|---|---|---|
-| `base` | 150MB | Fast | OK for English, weak on other languages |
+| `base` | 150MB | Fast | OK for English |
 | `small` | 500MB | Medium | Decent |
 | `medium` | 1.5GB | Slow | Good for most languages |
 | `large-v3` | 3GB | Very slow | Best quality |
 
-Timeout is dynamic: ~10s per 1s of audio + 30s buffer for model loading.
-
 ### Sessions keep disconnecting
 
-TCP keepalive is enabled (15s interval, 30s heartbeat). If sessions still drop:
-
-1. Check firewall allows port 9600: `ufw allow 9600/tcp`
-2. Check proxy is running: `systemctl status telegram-multi-proxy`
-3. The plugin auto-reconnects every 3 seconds
+1. Check firewall: `ufw allow 9600/tcp`
+2. Check proxy: `systemctl status telegram-multi-proxy`
+3. Plugin auto-reconnects every 3 seconds
+4. If exit 137 — add swap (see RAM section)
 
 ### Bot doesn't see topics / messages
 
-- Make sure **Topics mode** is enabled in BotFather Mini App
-- Make sure `OWNER_USER_ID` in `.env` matches your Telegram user ID
-- Check proxy logs: `journalctl -u telegram-multi-proxy -f`
+- Enable **Topics mode** in BotFather Mini App
+- Verify `OWNER_USER_ID` matches your Telegram user ID
+- Check logs: `journalctl -u telegram-multi-proxy -f`
 
 ## Project Structure
 
@@ -260,7 +316,7 @@ telegram-multi-thread-router/
 │   ├── src/
 │   │   ├── index.ts            # Entry point, env config
 │   │   ├── bot.ts              # Telegram bot, message routing, typing/reactions
-│   │   ├── commands.ts         # /new, /list, /sessions, /help
+│   │   ├── commands.ts         # /new, /list, /sessions, /close, /help
 │   │   ├── ipc-server.ts       # TCP server for Claude Code sessions
 │   │   ├── topics-registry.ts  # Persistent topic storage (JSON)
 │   │   ├── file-handler.ts     # Download files from Telegram CDN
@@ -270,16 +326,15 @@ telegram-multi-thread-router/
 ├── plugin/telegram-multi/      # Claude Code MCP channel plugin
 │   ├── server.ts               # MCP server, TCP client to proxy
 │   ├── .mcp.json               # MCP server config
-│   ├── .claude-plugin/
-│   │   └── plugin.json         # Plugin metadata
-│   └── skills/                 # /telegram-multi:configure, /telegram-multi:access
+│   └── .claude-plugin/
+│       └── plugin.json         # Plugin metadata
+├── orchestrator/
+│   └── CLAUDE.md               # Instructions for the orchestrator session
 ├── scripts/
 │   ├── start-proxy.sh          # Start proxy
-│   ├── start-session.sh        # Start single session
-│   └── start-all.sh            # Start proxy + multiple sessions in tmux
+│   ├── start-session.sh        # Start Claude Code session in tmux
+│   └── get-session-id.sh       # Get Claude conversation ID for a workdir
 ├── .env.example                # Environment template
-├── .claude-plugin/
-│   └── marketplace.json        # Plugin marketplace definition
 └── CLAUDE.md
 ```
 
