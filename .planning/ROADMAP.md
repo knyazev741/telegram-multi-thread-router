@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Session Lifecycle** - Create, run, stop, and resume Claude sessions (completed 2026-03-24)
 - [x] **Phase 3: Permission System** - `can_use_tool` bridged to Telegram inline buttons (completed 2026-03-24)
 - [x] **Phase 4: Status and UX** - Editable status message, typing indicator, rate-limit safety (completed 2026-03-24)
-- [ ] **Phase 5: Voice and File I/O** - Voice transcription, file/photo input, MCP output tools
+- [x] **Phase 5: Voice and File I/O** - Voice transcription, file/photo input, MCP output tools (completed 2026-03-24)
 - [ ] **Phase 6: Multi-Server** - TCP worker routing for remote Claude instances
 
 ## Phase Details
@@ -137,5 +137,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Session Lifecycle | 3/3 | Complete   | 2026-03-24 |
 | 3. Permission System | 3/3 | Complete   | 2026-03-24 |
 | 4. Status and UX | 3/3 | Complete   | 2026-03-24 |
-| 5. Voice and File I/O | 2/3 | In Progress|  |
+| 5. Voice and File I/O | 3/3 | Complete   | 2026-03-24 |
 | 6. Multi-Server | 0/3 | Not started | - |
