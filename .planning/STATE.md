@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-02-PLAN.md — _drain_response with status/output pipeline
-last_updated: "2026-03-24T11:57:38.015Z"
+stopped_at: Completed 04-03-PLAN.md — status and output test suite
+last_updated: "2026-03-24T12:01:09.770Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
   percent: 67
 ---
 
@@ -60,6 +60,7 @@ Progress: [███████░░░] 67%
 | Phase 03-permission-system P03 | 4 | 2 tasks | 3 files |
 | Phase 04-status-and-ux P01 | 2 | 2 tasks | 2 files |
 | Phase 04-status-and-ux P02 | 2 | 1 tasks | 1 files |
+| Phase 04-status-and-ux P03 | 4 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,8 @@ Recent decisions affecting current work:
 - [Phase 04-status-and-ux]: StatusUpdater uses time.monotonic() for drift-resistant elapsed calculation; finalize() uses call_later(30,...) to schedule deletion without blocking
 - [Phase 04-status-and-ux]: split_message splits at \n``` boundary first to preserve code blocks, then newline, then hard split
 - [Phase 04-status-and-ux]: StatusUpdater and TypingIndicator created per-turn in _run() (not per-session) so each query gets a fresh status message and finalize() is called exactly once per turn
+- [Phase 04-status-and-ux]: test_error_format uses inspect.getsource to confirm STAT-07 wiring without executing runner logic
+- [Phase 04-status-and-ux]: AsyncMock bot with .message_id attribute used as shared test helper pattern for aiogram testing
 
 ### Pending Todos
 
@@ -104,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T11:57:38.013Z
-Stopped at: Completed 04-02-PLAN.md — _drain_response with status/output pipeline
+Last session: 2026-03-24T12:01:09.768Z
+Stopped at: Completed 04-03-PLAN.md — status and output test suite
 Resume file: None
