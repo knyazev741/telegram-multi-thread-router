@@ -12,6 +12,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
     PermissionResultAllow,
     PermissionResultDeny,
     PermissionUpdate,
@@ -19,10 +20,13 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import PermissionRuleValue
 from aiogram import Bot
+from aiogram.exceptions import TelegramRetryAfter
 
 from src.sessions.state import SessionState
 from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
 from src.db.queries import update_session_id, update_session_state
+from src.bot.status import StatusUpdater
+from src.bot.output import split_message, TypingIndicator
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,8 @@ class SessionRunner:
         self._client: ClaudeSDKClient | None = None
         self._message_queue: asyncio.Queue[str | None] = asyncio.Queue()  # None is stop sentinel
         self._task: asyncio.Task | None = None
+        self._status: StatusUpdater | None = None
+        self._typing: TypingIndicator | None = None
 
     async def start(self) -> None:
         """Launch the runner asyncio task."""
@@ -93,8 +99,17 @@ class SessionRunner:
                     if text is None:  # stop sentinel
                         break
                     self.state = SessionState.RUNNING
+                    # Create per-turn UX helpers
+                    self._status = StatusUpdater(self._bot, self._chat_id, self.thread_id)
+                    self._typing = TypingIndicator(self._bot, self._chat_id, self.thread_id)
+                    await self._status.start_turn()
+                    await self._typing.start()
                     await client.query(text)
                     await self._drain_response(client)
+                    # Stop typing indicator (status finalized inside _drain_response on ResultMessage)
+                    if self._typing:
+                        await self._typing.stop()
+                        self._typing = None
                     if self.state == SessionState.INTERRUPTING:
                         self.state = SessionState.STOPPED
                         break
@@ -103,11 +118,19 @@ class SessionRunner:
         except Exception as e:
             logger.error("Session error for thread %d: %s", self.thread_id, e)
             self.state = SessionState.STOPPED
+            if self._typing:
+                await self._typing.stop()
+                self._typing = None
+            if self._status:
+                await self._status.stop()
+                self._status = None
             try:
+                error_text = f"❌ Error: {type(e).__name__}\n{e}"
                 await self._bot.send_message(
                     chat_id=self._chat_id,
                     message_thread_id=self.thread_id,
-                    text=f"Session error: {e}",
+                    text=error_text,
+                    parse_mode="HTML",
                 )
             except Exception:
                 logger.exception("Failed to send error message to thread %d", self.thread_id)
@@ -174,25 +197,77 @@ class SessionRunner:
             return PermissionResultDeny(message="Denied by user")
 
     async def _drain_response(self, client: ClaudeSDKClient) -> None:
-        """Receive all messages from the current turn, forwarding text to Telegram."""
+        """Receive all messages from the current turn, forwarding text to Telegram with status tracking."""
+        tool_count = 0
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text:
-                        await self._bot.send_message(
-                            chat_id=self._chat_id,
-                            message_thread_id=self.thread_id,
-                            text=block.text,
-                        )
+                        # STAT-03, STAT-04: Split long messages at code block boundaries
+                        parts = split_message(block.text)
+                        for part in parts:
+                            try:
+                                await self._bot.send_message(
+                                    chat_id=self._chat_id,
+                                    message_thread_id=self.thread_id,
+                                    text=part,
+                                    parse_mode="Markdown",
+                                )
+                            except TelegramRetryAfter as e:
+                                await asyncio.sleep(e.retry_after)
+                                await self._bot.send_message(
+                                    chat_id=self._chat_id,
+                                    message_thread_id=self.thread_id,
+                                    text=part,
+                                    parse_mode="Markdown",
+                                )
+                            except Exception:
+                                # Markdown parse failed — retry without parse_mode
+                                await self._bot.send_message(
+                                    chat_id=self._chat_id,
+                                    message_thread_id=self.thread_id,
+                                    text=part,
+                                )
+                    elif isinstance(block, ToolUseBlock):
+                        # STAT-02: Track tool usage for status display
+                        tool_count += 1
+                        if self._status:
+                            self._status.track_tool(block.name)
+
             elif isinstance(msg, ResultMessage):
+                # Persist session_id on first result
                 if self.session_id is None and msg.session_id:
                     self.session_id = msg.session_id
                     await update_session_id(self.thread_id, msg.session_id)
+
+                # STAT-06: Finalize status with cost/duration summary
+                if self._status:
+                    await self._status.finalize(
+                        cost_usd=msg.total_cost_usd,
+                        duration_ms=msg.duration_ms,
+                        tool_count=tool_count,
+                    )
+                    self._status = None
+
+                # STAT-07: If error, send formatted error message
+                if msg.is_error:
+                    error_text = f"❌ Error: SDK\n{msg.session_id or 'no session_id returned'}"
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=error_text,
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+
                 logger.info(
-                    "Turn complete for thread %d: cost=$%s, duration=%dms",
+                    "Turn complete for thread %d: cost=$%s, duration=%dms, tools=%d",
                     self.thread_id,
                     msg.total_cost_usd,
                     msg.duration_ms,
+                    tool_count,
                 )
 
     async def enqueue(self, text: str) -> None:
