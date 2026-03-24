@@ -6,6 +6,7 @@ from typing import Optional
 
 from aiogram import Bot
 
+from src.sessions.permissions import PermissionManager
 from src.sessions.runner import SessionRunner
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class SessionManager:
         workdir: str,
         bot: Bot,
         chat_id: int,
+        permission_manager: PermissionManager,
         session_id: str | None = None,
         model: str | None = None,
     ) -> SessionRunner:
@@ -39,6 +41,7 @@ class SessionManager:
                 workdir=workdir,
                 bot=bot,
                 chat_id=chat_id,
+                permission_manager=permission_manager,
                 session_id=session_id,
                 model=model,
             )
@@ -61,7 +64,7 @@ class SessionManager:
         """Return all (thread_id, runner) pairs."""
         return list(self._sessions.items())
 
-    async def resume_all(self, bot: Bot, chat_id: int) -> int:
+    async def resume_all(self, bot: Bot, chat_id: int, permission_manager: PermissionManager) -> int:
         """Resume all sessions that were active when bot last stopped.
 
         Returns number of successfully resumed sessions.
@@ -83,6 +86,7 @@ class SessionManager:
                     workdir=workdir,
                     bot=bot,
                     chat_id=chat_id,
+                    permission_manager=permission_manager,
                     session_id=session_id,
                     model=model,
                 )

@@ -11,6 +11,7 @@ from src.bot.routers.session import session_router
 from src.config import settings
 from src.db.schema import init_db
 from src.sessions.manager import SessionManager
+from src.sessions.permissions import PermissionManager
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,13 @@ def build_dispatcher() -> Dispatcher:
 async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     """Called when polling starts. Initialize database and SessionManager."""
     await init_db()
+    permission_manager = PermissionManager()
+    dispatcher["permission_manager"] = permission_manager
     manager = SessionManager()
     dispatcher["session_manager"] = manager
 
     # Resume sessions that were active before bot stopped
-    resumed = await manager.resume_all(bot, settings.group_chat_id)
+    resumed = await manager.resume_all(bot, settings.group_chat_id, permission_manager)
     if resumed:
         logger.info("Resumed %d session(s) from database", resumed)
 

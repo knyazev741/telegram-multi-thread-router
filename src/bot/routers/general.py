@@ -10,6 +10,7 @@ from aiogram.types import Message
 from src.config import settings
 from src.db.queries import insert_session, insert_topic
 from src.sessions.manager import SessionManager
+from src.sessions.permissions import PermissionManager
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,12 @@ general_router = Router(name="general")
 
 
 @general_router.message(F.message_thread_id.in_({1, None}), Command("new"))
-async def handle_new(message: Message, bot: Bot, session_manager: SessionManager) -> None:
+async def handle_new(
+    message: Message,
+    bot: Bot,
+    session_manager: SessionManager,
+    permission_manager: PermissionManager,
+) -> None:
     """Create a new Claude session with a dedicated forum topic.
 
     Usage: /new <name> <workdir>
@@ -46,6 +52,7 @@ async def handle_new(message: Message, bot: Bot, session_manager: SessionManager
         workdir=workdir,
         bot=bot,
         chat_id=settings.group_chat_id,
+        permission_manager=permission_manager,
     )
 
     await bot.send_message(
