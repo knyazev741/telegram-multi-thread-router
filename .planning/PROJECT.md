@@ -12,24 +12,24 @@ Users can control multiple Claude Code sessions from Telegram with full interact
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ Programmatic Claude Code session management via ClaudeSDKClient — v1.0
+- ✓ Forum topic ↔ session routing (each topic = one session) — v1.0
+- ✓ Permission requests as Telegram numbered inline buttons — v1.0
+- ✓ Real-time status updates (editable message, 30s refresh) — v1.0
+- ✓ Multi-server support: central bot + TCP workers — v1.0
+- ✓ Voice message transcription via faster-whisper — v1.0
+- ✓ File/photo handling (send to Claude, receive via MCP tools) — v1.0
+- ✓ Session lifecycle: create, resume, stop, list, auto-resume — v1.0
+- ✓ can_use_tool callback with safe tool auto-allow — v1.0
+- ✓ Custom MCP tools (reply, send_file, react, edit_message) — v1.0
+- ✓ SQLite persistence with WAL mode — v1.0
+- ✓ Slash command forwarding (/clear, /compact, /reset) — v1.0
+- ✓ Typing indicator while Claude works — v1.0
+- ✓ Health monitoring and zombie cleanup — v1.0
 
 ### Active
 
-- [ ] Programmatic Claude Code session management via Claude Agent SDK (ClaudeSDKClient)
-- [ ] Forum topic ↔ session routing (each topic = one session)
-- [ ] Permission requests displayed as Telegram messages with numbered inline buttons
-- [ ] Real-time status updates in thread (editable message, refresh every ~30s)
-- [ ] Multi-server support: central bot + remote workers connected via TCP
-- [ ] Voice message transcription via faster-whisper
-- [ ] File/photo handling (send to Claude, receive from Claude)
-- [ ] Session lifecycle: create, resume, stop, list
-- [ ] `can_use_tool` callback for programmatic permission control
-- [ ] Custom MCP tools for Telegram interaction (reply, react, edit_message)
-- [ ] Persistent state in SQLite (topics, sessions, message history)
-- [ ] Slash command forwarding (/clear, /compact, /reset)
-- [ ] Typing indicator while Claude works
-- [ ] Session resume across bot restarts
+(None — planning next milestone)
 
 ### Out of Scope
 
@@ -37,62 +37,18 @@ Users can control multiple Claude Code sessions from Telegram with full interact
 - Auto-scaling or container orchestration — manual server management
 - Multi-user access control — single owner, OWNER_USER_ID check
 - Webhook mode for Telegram — long polling is sufficient
+- Streaming partial text (edit message as Claude generates) — v2 candidate
+- Cost/token tracking dashboard — v2 candidate
+- Batched permission display for rapid requests — v2 candidate
 
 ## Context
 
-### Current State (being replaced)
-- Node.js/Bun proxy + MCP plugin architecture
-- Claude Code launched via tmux with `--dangerously-skip-permissions`
-- Auto-confirmation of prompts through tmux send-keys hacks
-- No real permission handling — everything auto-approved
-- Status not streamed to Telegram
-- Plugin loaded via `--dangerously-load-development-channels`
-
-### Why Rewrite
-- Claude Agent SDK provides proper programmatic control
-- `can_use_tool` callback eliminates need for bypass-permissions
-- `ClaudeSDKClient` gives access to all events: tool calls, status, output
-- Python ecosystem (aiogram + claude-agent-sdk) is cleaner than Node.js + MCP plugin hacks
-- Custom MCP tools run in-process via SDK, no separate plugin needed
-
-### Claude Agent SDK Key Capabilities
-- `ClaudeSDKClient`: interactive, bidirectional session control
-- `can_use_tool(tool_name, input_data, context)`: programmatic approve/deny
-- `receive_response()`: async iterator for all events (text, tool use, status)
-- Custom MCP tools via `create_sdk_mcp_server()`
-- `allowed_tools` for auto-approving safe tools
-- `interrupt()` for cancellation
-- `resume` for session persistence
-- `include_partial_messages` for streaming
-
-### UX Design for Telegram
-
-**Permission Requests:**
-Message text contains the question and full option text. Inline keyboard has only short numbered buttons (1️⃣, 2️⃣, 3️⃣...). Example:
-```
-🔐 Permission Request
-
-Tool: Bash
-Command: rm -rf node_modules
-
-1. ✅ Allow this once
-2. ✅ Allow always for this tool
-3. ❌ Deny
-
-[1️⃣] [2️⃣] [3️⃣]
-```
-
-**Status Updates:**
-One persistent message in thread, edited every 30s:
-```
-⚡ Working...
-📁 Reading src/main.py
-🔧 Tool: Edit (src/main.py)
-⏱ 2m 15s | 3 tool calls
-```
-
-**Claude Output:**
-Regular messages in thread, split at 4096 chars. Code blocks preserved.
+### Current State (v1.0 shipped)
+- Python 3.11+, aiogram 3.26, claude-agent-sdk 0.1.50, aiosqlite, uvloop
+- 2,862 LOC source + 2,002 LOC tests across 43 Python files
+- 104 tests passing, 6 phases complete
+- Central bot + remote TCP workers architecture
+- SQLite with WAL mode for persistence
 
 ### Architecture
 
@@ -100,36 +56,40 @@ Regular messages in thread, split at 4096 chars. Code blocks preserved.
 Central Bot (Python, aiogram 3)
 ├─ Telegram Handler: long polling, message routing
 ├─ Session Manager: tracks active sessions, routes messages
-├─ Permission Manager: pending permission requests, callback query handler
-├─ Status Updater: periodic message edits with current status
+├─ Permission Manager: asyncio.Future bridge to inline buttons
+├─ Status Updater: 30s edit loop with tool tracking
+├─ Voice: faster-whisper transcription
 └─ SQLite: topics, sessions, message history
 
 Workers (Python, one per server)
 ├─ ClaudeSDKClient: manages Claude Code subprocess
-├─ Custom MCP tools: reply, react, edit_message, send_file
-├─ Event stream: forwards events to central bot
-└─ TCP connection to central bot
+├─ WorkerOutputChannel: Bot adapter → TCP messages
+├─ Permission bridge: can_use_tool → TCP → bot buttons → TCP → resolve
+└─ TCP connection with auth + exponential backoff reconnect
 ```
 
 ## Constraints
 
-- **Language**: Python 3.10+ — Claude Agent SDK is Python-only
-- **Telegram lib**: aiogram 3 — async, good forum topics support
-- **Storage**: SQLite — single file, simple deploy
-- **Transport**: TCP with auth token between bot and workers
-- **Deployment**: Each server needs Python 3.10+, claude CLI, worker script
-- **Telegram API**: 4096 char message limit, inline keyboard button text limit ~64 chars
+- **Language**: Python 3.11+ — Claude Agent SDK requirement
+- **Telegram lib**: aiogram 3.26+ — async, forum topics support
+- **Storage**: SQLite with WAL mode — single file, simple deploy
+- **Transport**: Length-prefixed msgspec over TCP with auth token
+- **Deployment**: Each server needs Python 3.11+, claude CLI, worker script
+- **Telegram API**: 4096 char message limit, 64-byte callback data limit
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Python + Claude Agent SDK | Proper programmatic control, no bypass-permissions | — Pending |
-| aiogram 3 | Async Python, best Telegram forum topics support | — Pending |
-| Monolith bot + remote workers | Bot centralizes Telegram, workers run Claude locally | — Pending |
-| Numbered buttons for permissions | Long option text doesn't fit in buttons, numbers are universal | — Pending |
-| SQLite over JSON | Better querying, single-file, atomic writes | — Pending |
-| Delete old Node.js code | Clean start, no legacy baggage | — Pending |
+| Python + Claude Agent SDK | Proper programmatic control, no bypass-permissions | ✓ Good |
+| aiogram 3 | Async Python, best Telegram forum topics support | ✓ Good |
+| Monolith bot + remote workers | Bot centralizes Telegram, workers run Claude locally | ✓ Good |
+| Numbered buttons for permissions | Long option text doesn't fit in buttons, numbers are universal | ✓ Good |
+| SQLite over JSON | Better querying, single-file, atomic writes | ✓ Good |
+| Delete old Node.js code | Clean start, no legacy baggage | ✓ Good |
+| asyncio.Future for permission bridge | Bridges async can_use_tool callback to Telegram callback queries | ✓ Good |
+| msgspec for TCP framing | Schema validation + binary encoding, prevents protocol drift | ✓ Good |
+| WorkerOutputChannel adapter | Reuses SessionRunner unchanged on worker side | ✓ Good |
 
 ---
-*Last updated: 2026-03-24 after initialization*
+*Last updated: 2026-03-25 after v1.0 milestone*
