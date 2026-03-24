@@ -60,3 +60,47 @@ class SessionManager:
     def list_all(self) -> list[tuple[int, SessionRunner]]:
         """Return all (thread_id, runner) pairs."""
         return list(self._sessions.items())
+
+    async def resume_all(self, bot: Bot, chat_id: int) -> int:
+        """Resume all sessions that were active when bot last stopped.
+
+        Returns number of successfully resumed sessions.
+        """
+        from src.db.queries import get_resumable_sessions, update_session_state
+
+        rows = await get_resumable_sessions()
+        resumed = 0
+
+        for row in rows:
+            thread_id = row["thread_id"]
+            session_id = row["session_id"]
+            workdir = row["workdir"]
+            model = row.get("model")
+
+            try:
+                await self.create(
+                    thread_id=thread_id,
+                    workdir=workdir,
+                    bot=bot,
+                    chat_id=chat_id,
+                    session_id=session_id,
+                    model=model,
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=thread_id,
+                    text="Session resumed after bot restart.",
+                )
+                resumed += 1
+                logger.info("Resumed session %s in topic %d", session_id, thread_id)
+            except Exception as e:
+                logger.error(
+                    "Failed to resume session %s in topic %d: %s", session_id, thread_id, e
+                )
+                # Mark as stopped in DB so it doesn't retry on next restart
+                try:
+                    await update_session_state(thread_id, "stopped")
+                except Exception:
+                    pass
+
+        return resumed
