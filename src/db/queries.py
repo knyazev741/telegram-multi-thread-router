@@ -13,12 +13,12 @@ async def insert_topic(thread_id: int, name: str) -> None:
         await conn.commit()
 
 
-async def insert_session(thread_id: int, workdir: str, model: str | None = None) -> None:
+async def insert_session(thread_id: int, workdir: str, model: str | None = None, server: str = "local") -> None:
     """Insert a new session record with state='idle'."""
     async with get_connection() as conn:
         await conn.execute(
-            "INSERT INTO sessions (thread_id, workdir, model, state) VALUES (?, ?, ?, 'idle')",
-            (thread_id, workdir, model),
+            "INSERT INTO sessions (thread_id, workdir, model, state, server) VALUES (?, ?, ?, 'idle', ?)",
+            (thread_id, workdir, model, server),
         )
         await conn.commit()
 
@@ -47,7 +47,7 @@ async def get_resumable_sessions() -> list[dict]:
     """Return all sessions that were running or idle and have a session_id (resumable on startup)."""
     async with get_connection() as conn:
         cursor = await conn.execute(
-            "SELECT thread_id, session_id, workdir, model, state FROM sessions "
+            "SELECT thread_id, session_id, workdir, model, state, server FROM sessions "
             "WHERE state IN ('running', 'idle') AND session_id IS NOT NULL"
         )
         rows = await cursor.fetchall()
@@ -69,7 +69,8 @@ async def get_all_active_sessions() -> list[dict]:
     """Return all sessions in idle or running state, joined with topic name."""
     async with get_connection() as conn:
         cursor = await conn.execute(
-            "SELECT s.*, t.name FROM sessions s "
+            "SELECT s.id, s.thread_id, s.session_id, s.workdir, s.model, s.state, s.server, "
+            "s.created_at, s.updated_at, t.name FROM sessions s "
             "JOIN topics t ON s.thread_id=t.thread_id "
             "WHERE s.state IN ('idle', 'running')"
         )

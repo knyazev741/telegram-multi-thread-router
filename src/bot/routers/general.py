@@ -9,8 +9,10 @@ from aiogram.types import Message
 
 from src.config import settings
 from src.db.queries import insert_session, insert_topic
+from src.ipc.server import WorkerRegistry
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionManager
+from src.sessions.remote import RemoteSession
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +25,26 @@ async def handle_new(
     bot: Bot,
     session_manager: SessionManager,
     permission_manager: PermissionManager,
+    worker_registry: WorkerRegistry,
 ) -> None:
     """Create a new Claude session with a dedicated forum topic.
 
-    Usage: /new <name> <workdir>
+    Usage: /new <name> <workdir> [server-name]
     """
-    args = message.text.split(maxsplit=2)
+    args = message.text.split(maxsplit=3)
     if len(args) < 3:
-        await message.reply("Usage: /new <name> <workdir>")
+        await message.reply("Usage: /new <name> <workdir> [server-name]")
         return
 
-    _, name, workdir = args
+    name = args[1]
+    workdir = args[2]
+    server_name = args[3] if len(args) > 3 else "local"
+
+    # Validate server connection for remote sessions
+    if server_name != "local":
+        if not worker_registry.is_connected(server_name):
+            await message.reply(f"Server '{server_name}' is not connected.")
+            return
 
     # Create forum topic
     topic = await bot(CreateForumTopic(
@@ -44,28 +55,36 @@ async def handle_new(
 
     # Persist to DB
     await insert_topic(thread_id, name)
-    await insert_session(thread_id, workdir)
+    await insert_session(thread_id, workdir, server=server_name)
 
-    # Start session runner
-    await session_manager.create(
-        thread_id=thread_id,
-        workdir=workdir,
-        bot=bot,
-        chat_id=settings.group_chat_id,
-        permission_manager=permission_manager,
-    )
+    # Start session (local or remote)
+    if server_name != "local":
+        await session_manager.create_remote(
+            thread_id=thread_id,
+            workdir=workdir,
+            worker_id=server_name,
+            worker_registry=worker_registry,
+        )
+    else:
+        await session_manager.create(
+            thread_id=thread_id,
+            workdir=workdir,
+            bot=bot,
+            chat_id=settings.group_chat_id,
+            permission_manager=permission_manager,
+        )
 
     await bot.send_message(
         chat_id=settings.group_chat_id,
         message_thread_id=thread_id,
-        text=f"Session '{name}' started. Working directory: {workdir}",
+        text=f"Session '{name}' started on {server_name}. Working directory: {workdir}",
     )
     await message.reply(f"Session '{name}' created in new topic.")
 
 
 @general_router.message(F.message_thread_id.in_({1, None}), Command("list"))
 async def handle_list(message: Message, session_manager: SessionManager) -> None:
-    """List all active sessions."""
+    """List all active sessions with server info."""
     sessions = session_manager.list_all()
     if not sessions:
         await message.reply("No active sessions.")
@@ -73,8 +92,16 @@ async def handle_list(message: Message, session_manager: SessionManager) -> None
 
     lines = []
     for thread_id, runner in sessions:
+        if isinstance(runner, RemoteSession):
+            server = runner.worker_id
+            status = "(connected)" if runner.is_alive else "(disconnected)"
+        else:
+            server = "local"
+            status = ""
+
+        server_info = f"on <i>{server}</i> {status}".strip()
         lines.append(
-            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}]"
+            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}"
         )
     await message.reply("\n".join(lines), parse_mode="HTML")
 
@@ -84,5 +111,5 @@ async def handle_general_fallback(message: Message) -> None:
     """Catch-all for unrecognized messages in General topic."""
     logger.info("General topic message: %s", message.text or "(no text)")
     await message.reply(
-        "Use /new <name> <workdir> to create a session, or /list to see active sessions."
+        "Use /new <name> <workdir> [server-name] to create a session, or /list to see active sessions."
     )
