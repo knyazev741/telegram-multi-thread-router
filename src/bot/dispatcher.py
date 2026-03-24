@@ -10,6 +10,7 @@ from src.bot.routers.general import general_router
 from src.bot.routers.session import session_router
 from src.config import settings
 from src.db.schema import init_db
+from src.ipc.server import WorkerRegistry, start_ipc_server
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionManager
 
@@ -60,6 +61,20 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     )
     dispatcher["health_task"] = health_task
 
+    # Start TCP IPC server for remote worker connections
+    worker_registry = WorkerRegistry()
+    dispatcher["worker_registry"] = worker_registry
+    ipc_server = await start_ipc_server(
+        settings.ipc_host,
+        settings.ipc_port,
+        settings.auth_token,
+        bot,
+        manager,
+        permission_manager,
+        worker_registry,
+    )
+    dispatcher["ipc_server"] = ipc_server
+
     logger.info("Bot startup complete — SessionManager initialized, health monitoring active")
 
 
@@ -73,6 +88,12 @@ async def on_shutdown(dispatcher: Dispatcher) -> None:
             await health_task
         except asyncio.CancelledError:
             pass
+
+    # Close IPC server before stopping sessions
+    ipc_server: asyncio.Server | None = dispatcher.get("ipc_server")
+    if ipc_server:
+        ipc_server.close()
+        await ipc_server.wait_closed()
 
     # Stop all active sessions
     manager: SessionManager | None = dispatcher.get("session_manager")

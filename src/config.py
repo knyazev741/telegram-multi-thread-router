@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     owner_user_id: int
     group_chat_id: int
     auth_token: str
+    ipc_host: str = "0.0.0.0"
+    ipc_port: int = 9800
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -1,0 +1,287 @@
+"""Bot-side IPC server — accepts worker TCP connections and dispatches protocol messages."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from aiogram import Bot
+from aiogram.types import FSInputFile, ReactionTypeEmoji
+
+from src.config import settings
+from src.ipc.protocol import (
+    AuthFailMsg,
+    AuthMsg,
+    AuthOkMsg,
+    AssistantTextMsg,
+    McpEditMessageMsg,
+    McpReactMsg,
+    McpSendFileMsg,
+    McpSendMessageMsg,
+    PermissionRequestMsg,
+    PermissionResponseMsg,
+    SessionEndedMsg,
+    SessionStartedMsg,
+    StatusUpdateMsg,
+    recv_w2b,
+    send_msg,
+)
+from src.bot.output import split_message
+from src.sessions.permissions import build_permission_keyboard, format_permission_message
+
+logger = logging.getLogger(__name__)
+
+
+class WorkerRegistry:
+    """Tracks live worker TCP connections keyed by worker_id."""
+
+    def __init__(self) -> None:
+        self._workers: dict[str, asyncio.StreamWriter] = {}
+
+    def register(self, worker_id: str, writer: asyncio.StreamWriter) -> None:
+        """Record a newly authenticated worker connection."""
+        self._workers[worker_id] = writer
+
+    def unregister(self, worker_id: str) -> None:
+        """Remove a worker connection (called on disconnect)."""
+        self._workers.pop(worker_id, None)
+
+    async def send_to(self, worker_id: str, msg) -> bool:
+        """Send a message to a specific worker. Returns False if not connected or closing."""
+        writer = self._workers.get(worker_id)
+        if writer is None or writer.is_closing():
+            return False
+        await send_msg(writer, msg)
+        return True
+
+    def is_connected(self, worker_id: str) -> bool:
+        """Return True if the worker has a live (non-closing) connection."""
+        w = self._workers.get(worker_id)
+        return w is not None and not w.is_closing()
+
+    def list_workers(self) -> list[str]:
+        """Return a list of all connected worker IDs."""
+        return list(self._workers.keys())
+
+
+async def start_ipc_server(
+    host: str,
+    port: int,
+    auth_token: str,
+    bot: Bot,
+    session_manager,
+    permission_manager,
+    worker_registry: WorkerRegistry,
+) -> asyncio.Server:
+    """Start the TCP IPC server. Returns the asyncio.Server object."""
+
+    async def handle_connection(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        # Spawn a task so the accept loop is never blocked.
+        asyncio.create_task(
+            _handle_worker(
+                reader,
+                writer,
+                auth_token,
+                bot,
+                session_manager,
+                permission_manager,
+                worker_registry,
+            )
+        )
+
+    server = await asyncio.start_server(handle_connection, host, port)
+    logger.info("IPC server listening on %s:%d", host, port)
+    return server
+
+
+async def _handle_worker(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    auth_token: str,
+    bot: Bot,
+    session_manager,
+    permission_manager,
+    worker_registry: WorkerRegistry,
+) -> None:
+    """Handle a single worker connection: authenticate, then dispatch messages."""
+    worker_id: str | None = None
+    try:
+        # --- Auth handshake ---
+        first_msg = await recv_w2b(reader)
+        if not isinstance(first_msg, AuthMsg) or first_msg.token != auth_token:
+            await send_msg(writer, AuthFailMsg(reason="invalid token"))
+            writer.close()
+            return
+
+        worker_id = first_msg.worker_id
+        await send_msg(writer, AuthOkMsg(worker_id=worker_id))
+        worker_registry.register(worker_id, writer)
+        logger.info("Worker %s authenticated and registered", worker_id)
+
+        # --- Message dispatch loop ---
+        while True:
+            msg = await recv_w2b(reader)
+            if msg is None:
+                break  # EOF / clean disconnect
+
+            if isinstance(msg, AssistantTextMsg):
+                parts = split_message(msg.text)
+                for part in parts:
+                    try:
+                        await bot.send_message(
+                            chat_id=settings.group_chat_id,
+                            message_thread_id=msg.topic_id,
+                            text=part,
+                            parse_mode="Markdown",
+                        )
+                    except Exception:
+                        try:
+                            await bot.send_message(
+                                chat_id=settings.group_chat_id,
+                                message_thread_id=msg.topic_id,
+                                text=part,
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "Failed to send assistant text to topic %d: %s",
+                                msg.topic_id,
+                                e,
+                            )
+
+            elif isinstance(msg, PermissionRequestMsg):
+                _request_id, future = permission_manager.create_request()
+                perm_text = format_permission_message(msg.tool_name, msg.input_data)
+                keyboard = build_permission_keyboard(_request_id)
+                try:
+                    await bot.send_message(
+                        chat_id=settings.group_chat_id,
+                        message_thread_id=msg.topic_id,
+                        text=perm_text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to send permission request to topic %d: %s",
+                        msg.topic_id,
+                        e,
+                    )
+
+                async def _await_permission(
+                    orig_request_id: str,
+                    perm_future: asyncio.Future,
+                    w_id: str,
+                ) -> None:
+                    try:
+                        result = await asyncio.wait_for(perm_future, timeout=300.0)
+                    except asyncio.TimeoutError:
+                        result = "deny"
+                        permission_manager.expire(orig_request_id)
+                    response = PermissionResponseMsg(
+                        request_id=msg.request_id, action=result
+                    )
+                    await worker_registry.send_to(w_id, response)
+
+                asyncio.create_task(
+                    _await_permission(_request_id, future, worker_id)
+                )
+
+            elif isinstance(msg, StatusUpdateMsg):
+                logger.debug(
+                    "StatusUpdate from worker %s: topic=%d tool=%s elapsed=%dms calls=%d",
+                    worker_id,
+                    msg.topic_id,
+                    msg.tool_name,
+                    msg.elapsed_ms,
+                    msg.tool_calls,
+                )
+
+            elif isinstance(msg, SessionStartedMsg):
+                logger.info(
+                    "Worker %s started session %s on topic %d",
+                    worker_id,
+                    msg.session_id,
+                    msg.topic_id,
+                )
+
+            elif isinstance(msg, SessionEndedMsg):
+                if msg.error:
+                    try:
+                        await bot.send_message(
+                            chat_id=settings.group_chat_id,
+                            message_thread_id=msg.topic_id,
+                            text=f"Session ended with error: {msg.error}",
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "Failed to send session error to topic %d: %s",
+                            msg.topic_id,
+                            e,
+                        )
+                else:
+                    logger.info(
+                        "Worker %s ended session on topic %d", worker_id, msg.topic_id
+                    )
+
+            elif isinstance(msg, McpSendMessageMsg):
+                try:
+                    await bot.send_message(
+                        chat_id=settings.group_chat_id,
+                        message_thread_id=msg.topic_id,
+                        text=msg.text,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "McpSendMessage failed for topic %d: %s", msg.topic_id, e
+                    )
+
+            elif isinstance(msg, McpReactMsg):
+                try:
+                    await bot.set_message_reaction(
+                        chat_id=settings.group_chat_id,
+                        message_id=msg.message_id,
+                        reaction=[ReactionTypeEmoji(emoji=msg.emoji)],
+                    )
+                except Exception as e:
+                    logger.error(
+                        "McpReact failed for message %d: %s", msg.message_id, e
+                    )
+
+            elif isinstance(msg, McpEditMessageMsg):
+                try:
+                    await bot.edit_message_text(
+                        chat_id=settings.group_chat_id,
+                        message_id=msg.message_id,
+                        text=msg.text,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "McpEditMessage failed for message %d: %s", msg.message_id, e
+                    )
+
+            elif isinstance(msg, McpSendFileMsg):
+                try:
+                    await bot.send_document(
+                        chat_id=settings.group_chat_id,
+                        message_thread_id=msg.topic_id,
+                        document=FSInputFile(msg.file_path),
+                        caption=msg.caption,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "McpSendFile failed for topic %d: %s", msg.topic_id, e
+                    )
+
+            else:
+                logger.warning("Unknown message type from worker %s: %r", worker_id, msg)
+
+    except Exception as e:
+        logger.error("Error in worker handler for %s: %s", worker_id or "unknown", e)
+    finally:
+        if worker_id is not None:
+            worker_registry.unregister(worker_id)
+            logger.info("Worker %s disconnected and unregistered", worker_id)
+        if not writer.is_closing():
+            writer.close()
