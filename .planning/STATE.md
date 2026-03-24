@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-03-24)
 ## Current Position
 
 Phase: 1 of 6 (Foundation)
-Plan: 0 of 3 in current phase
-Status: Ready to plan
-Last activity: 2026-03-24 — Roadmap created, ready to begin planning Phase 1
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 6%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 3 min
+- Total execution time: 0.05 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-foundation | 1 | 3 min | 3 min |
 
 **Recent Trend:**
-- Last 5 plans: -
+- Last 5 plans: 01-01 (3 min)
 - Trend: -
 
 *Updated after each plan completion*
@@ -45,6 +45,8 @@ Recent decisions affecting current work:
 - [Roadmap]: Phase 5 (Voice/File I/O) depends on Phase 2, not Phase 4 — it is additive and has no dependency on the permission or status systems
 - [Roadmap]: Phase 6 (Multi-Server) deferred until single-server workflow is validated in daily use
 - [Roadmap]: INPT-01, INPT-05, INPT-06 assigned to Phase 2 (core text routing needed for session lifecycle); INPT-02, INPT-03, INPT-04 assigned to Phase 5
+- [01-01]: Added extra="ignore" to pydantic-settings BaseSettings to handle legacy .env variables gracefully without validation errors
+- [01-01]: User must add GROUP_CHAT_ID to their .env — new required field not present in old Node.js .env
 
 ### Pending Todos
 
@@ -59,5 +61,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-24
-Stopped at: Roadmap written, requirements traceability updated
+Stopped at: Completed 01-01-PLAN.md — Python scaffold created, Node.js codebase deleted
 Resume file: None
