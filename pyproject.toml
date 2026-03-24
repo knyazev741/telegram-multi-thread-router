@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "aiogram>=3.26.0,<4",
     "aiosqlite>=0.22.0,<1",
+    "claude-agent-sdk>=0.1.50",
     "uvloop>=0.22.0,<1",
     "pydantic-settings>=2.13.0,<3",
 ]

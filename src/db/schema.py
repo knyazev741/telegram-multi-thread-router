@@ -56,6 +56,11 @@ async def init_db(db_path: Path | None = None) -> None:
         await conn.execute("PRAGMA journal_mode=WAL;")
         await conn.execute("PRAGMA foreign_keys=ON;")
         await conn.executescript(SCHEMA_SQL)
+        # Migration: add model column if not present (idempotent)
+        try:
+            await conn.execute("ALTER TABLE sessions ADD COLUMN model TEXT")
+        except Exception:
+            pass  # Column already exists
         await conn.commit()
 
     logger.info("Database initialized at %s (WAL mode)", path)

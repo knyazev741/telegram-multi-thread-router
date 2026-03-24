@@ -38,7 +38,7 @@ async def test_sessions_table_exists(tmp_db):
     async with aiosqlite.connect(str(tmp_db)) as conn:
         cursor = await conn.execute("PRAGMA table_info(sessions);")
         columns = {row[1] for row in await cursor.fetchall()}
-        assert columns == {"id", "thread_id", "session_id", "workdir", "server", "state", "created_at", "updated_at"}
+        assert columns == {"id", "thread_id", "session_id", "workdir", "server", "state", "created_at", "updated_at", "model"}
 
 
 async def test_message_history_table_exists(tmp_db):
