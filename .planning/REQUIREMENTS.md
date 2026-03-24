@@ -29,15 +29,15 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Permission System
 
-- [ ] **PERM-01**: `can_use_tool` callback intercepts tool permission requests
+- [x] **PERM-01**: `can_use_tool` callback intercepts tool permission requests
 - [ ] **PERM-02**: Permission request displayed as Telegram message with question + full option text in body
 - [ ] **PERM-03**: Inline keyboard shows only numbered buttons (1️⃣, 2️⃣, 3️⃣) mapped to options
 - [ ] **PERM-04**: User taps button → callback resolved → Claude continues
-- [ ] **PERM-05**: Permission timeout (5 min) auto-denies if user doesn't respond
-- [ ] **PERM-06**: "Allow always" option adds tool pattern to session's allowed_tools
-- [ ] **PERM-07**: Safe tools (Read, Glob, Grep, Explore agent) auto-approved via allowed_tools list
+- [x] **PERM-05**: Permission timeout (5 min) auto-denies if user doesn't respond
+- [x] **PERM-06**: "Allow always" option adds tool pattern to session's allowed_tools
+- [x] **PERM-07**: Safe tools (Read, Glob, Grep, Explore agent) auto-approved via allowed_tools list
 - [ ] **PERM-08**: Stale permission buttons answered with "expired" on callback query
-- [ ] **PERM-09**: Dummy PreToolUse hook registered to ensure can_use_tool fires (SDK requirement)
+- [x] **PERM-09**: Dummy PreToolUse hook registered to ensure can_use_tool fires (SDK requirement)
 
 ### Status & Output
 
@@ -119,15 +119,15 @@ Deferred to future release. Tracked but not in current roadmap.
 | SESS-07 | Phase 2 | Complete |
 | SESS-08 | Phase 2 | Complete |
 | SESS-09 | Phase 2 | Complete |
-| PERM-01 | Phase 3 | Pending |
+| PERM-01 | Phase 3 | Complete |
 | PERM-02 | Phase 3 | Pending |
 | PERM-03 | Phase 3 | Pending |
 | PERM-04 | Phase 3 | Pending |
-| PERM-05 | Phase 3 | Pending |
-| PERM-06 | Phase 3 | Pending |
-| PERM-07 | Phase 3 | Pending |
+| PERM-05 | Phase 3 | Complete |
+| PERM-06 | Phase 3 | Complete |
+| PERM-07 | Phase 3 | Complete |
 | PERM-08 | Phase 3 | Pending |
-| PERM-09 | Phase 3 | Pending |
+| PERM-09 | Phase 3 | Complete |
 | STAT-01 | Phase 4 | Pending |
 | STAT-02 | Phase 4 | Pending |
 | STAT-03 | Phase 4 | Pending |
