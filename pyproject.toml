@@ -10,6 +10,7 @@ dependencies = [
     "uvloop>=0.22.0,<1",
     "pydantic-settings>=2.13.0,<3",
     "faster-whisper>=1.1.0",
+    "msgspec>=0.18.0",
 ]
 
 [project.optional-dependencies]
