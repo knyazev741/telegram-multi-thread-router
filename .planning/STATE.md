@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-01-PLAN.md — Phase 6 IPC protocol layer and bot-side server
-last_updated: "2026-03-24T23:18:44.633Z"
+stopped_at: Completed 06-02-PLAN.md — Worker process TCP output channel and connection loop
+last_updated: "2026-03-24T23:22:55.394Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
   percent: 67
 ---
 
@@ -65,6 +65,7 @@ Progress: [███████░░░] 67%
 | Phase 05-voice-and-file-io P02 | 2 | 2 tasks | 2 files |
 | Phase 05-voice-and-file-io P03 | 5 | 1 tasks | 1 files |
 | Phase 06-multi-server P01 | 2 | 2 tasks | 6 files |
+| Phase 06-multi-server P02 | 3 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,9 @@ Recent decisions affecting current work:
 - [Phase 05-voice-and-file-io]: Used _capture_tools pattern: patch create_sdk_mcp_server at construction time to extract SdkMcpTool.handler callables for direct invocation without SDK execution
 - [Phase 06-multi-server]: Explicit tag strings (tag="auth", etc.) used in msgspec Structs instead of tag=True — required for discriminated Union decoding with msgspec msgpack
 - [Phase 06-multi-server]: asyncio.IncompleteReadError caught (not EOFError) in framing helpers per research Pitfall 1
+- [Phase 06-multi-server]: Permission bridge implemented via monkey-patching runner._can_use_tool instead of WorkerOutputChannel.send_message reply_markup detection
+- [Phase 06-multi-server]: Permission futures resolved with deny on TCP disconnect for clean unblocking of _can_use_tool without CancelledError propagation
+- [Phase 06-multi-server]: Sessions survive TCP disconnect — _on_disconnected does not stop runners, re-registers on reconnect via SessionStartedMsg
 
 ### Pending Todos
 
@@ -117,6 +121,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T23:18:44.631Z
-Stopped at: Completed 06-01-PLAN.md — Phase 6 IPC protocol layer and bot-side server
+Last session: 2026-03-24T23:22:55.392Z
+Stopped at: Completed 06-02-PLAN.md — Worker process TCP output channel and connection loop
 Resume file: None
