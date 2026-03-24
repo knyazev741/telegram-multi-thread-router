@@ -36,11 +36,13 @@ async def test_general_fallback_responds():
 
 async def test_handle_new_missing_args():
     """/new with too few args replies with usage."""
+    from src.ipc.server import WorkerRegistry
     msg = _make_message(thread_id=1, text="/new")
     bot = AsyncMock()
     session_manager = MagicMock(spec=SessionManager)
     permission_manager = MagicMock()
-    await handle_new(msg, bot, session_manager, permission_manager)
+    worker_registry = WorkerRegistry()
+    await handle_new(msg, bot, session_manager, permission_manager, worker_registry)
     msg.reply.assert_called_once()
     assert "Usage" in msg.reply.call_args[0][0]
 
