@@ -20,12 +20,12 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **SESS-01**: User can create a new session linked to a forum topic with `/new <name> <workdir> [server]`
 - [ ] **SESS-02**: User can list active sessions with status via `/list` command
 - [ ] **SESS-03**: User can stop a session via `/stop` command in the topic
-- [ ] **SESS-04**: ClaudeSDKClient instance created per session with correct cwd, model, system_prompt
-- [ ] **SESS-05**: Session state machine: idle → running → waiting_permission → running → idle
-- [ ] **SESS-06**: Session persists session_id to SQLite for resume capability
+- [x] **SESS-04**: ClaudeSDKClient instance created per session with correct cwd, model, system_prompt
+- [x] **SESS-05**: Session state machine: idle → running → waiting_permission → running → idle
+- [x] **SESS-06**: Session persists session_id to SQLite for resume capability
 - [ ] **SESS-07**: Bot auto-resumes all saved sessions on startup
 - [ ] **SESS-08**: Health monitoring detects zombie Claude processes and cleans up
-- [ ] **SESS-09**: User can interrupt running Claude via `/stop` or dedicated button
+- [x] **SESS-09**: User can interrupt running Claude via `/stop` or dedicated button
 
 ### Permission System
 
@@ -113,12 +113,12 @@ Deferred to future release. Tracked but not in current roadmap.
 | SESS-01 | Phase 2 | Pending |
 | SESS-02 | Phase 2 | Pending |
 | SESS-03 | Phase 2 | Pending |
-| SESS-04 | Phase 2 | Pending |
-| SESS-05 | Phase 2 | Pending |
-| SESS-06 | Phase 2 | Pending |
+| SESS-04 | Phase 2 | Complete |
+| SESS-05 | Phase 2 | Complete |
+| SESS-06 | Phase 2 | Complete |
 | SESS-07 | Phase 2 | Pending |
 | SESS-08 | Phase 2 | Pending |
-| SESS-09 | Phase 2 | Pending |
+| SESS-09 | Phase 2 | Complete |
 | PERM-01 | Phase 3 | Pending |
 | PERM-02 | Phase 3 | Pending |
 | PERM-03 | Phase 3 | Pending |

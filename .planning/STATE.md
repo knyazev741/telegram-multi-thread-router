@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-03-PLAN.md — SQLite persistence layer with WAL mode
-last_updated: "2026-03-24T10:10:48.305Z"
+stopped_at: "Completed 02-01-PLAN.md — Session engine: SessionRunner, SessionState, DB queries"
+last_updated: "2026-03-24T10:40:07.937Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 6
+  completed_plans: 4
   percent: 67
 ---
 
@@ -52,6 +52,7 @@ Progress: [███████░░░] 67%
 *Updated after each plan completion*
 | Phase 01-foundation P02 | 8 | 2 tasks | 10 files |
 | Phase 01-foundation P03 | 2 | 2 tasks | 4 files |
+| Phase 02-session-lifecycle P01 | 8 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,8 @@ Recent decisions affecting current work:
 - [Phase 01-02]: OwnerAuthMiddleware registered as outer_middleware at dispatcher level (not per-router) so auth fires before any filter evaluation
 - [Phase 01-foundation]: WAL mode set before schema creation in init_db() — ensures WAL is established before any table writes
 - [Phase 01-foundation]: get_connection() sets synchronous=NORMAL and row_factory=aiosqlite.Row per connection for WAL performance and dict-like row access
+- [Phase 02-session-lifecycle]: Dummy PreToolUse hook registered alongside can_use_tool to prevent SDK issue #18735 — without it can_use_tool silently never fires
+- [Phase 02-session-lifecycle]: stop() sends stop sentinel (None) to queue after interrupt() to unblock queue.get() if runner is IDLE
 
 ### Pending Todos
 
@@ -82,6 +85,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T10:07:49.053Z
-Stopped at: Completed 01-03-PLAN.md — SQLite persistence layer with WAL mode
+Last session: 2026-03-24T10:40:07.935Z
+Stopped at: Completed 02-01-PLAN.md — Session engine: SessionRunner, SessionState, DB queries
 Resume file: None
