@@ -67,3 +67,29 @@ def channel_post_message():
 def handler():
     """Mock handler function."""
     return AsyncMock(return_value="handled")
+
+
+@pytest.fixture
+def permission_manager():
+    from src.sessions.permissions import PermissionManager
+    return PermissionManager()
+
+
+@pytest.fixture
+def mock_bot():
+    bot = AsyncMock()
+    bot.send_message = AsyncMock()
+    return bot
+
+
+@pytest.fixture
+def session_runner(mock_bot, permission_manager):
+    from src.sessions.runner import SessionRunner
+    runner = SessionRunner(
+        thread_id=42,
+        workdir="/tmp/test",
+        bot=mock_bot,
+        chat_id=GROUP_CHAT_ID,
+        permission_manager=permission_manager,
+    )
+    return runner
