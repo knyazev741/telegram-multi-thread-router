@@ -39,7 +39,8 @@ async def test_handle_new_missing_args():
     msg = _make_message(thread_id=1, text="/new")
     bot = AsyncMock()
     session_manager = MagicMock(spec=SessionManager)
-    await handle_new(msg, bot, session_manager)
+    permission_manager = MagicMock()
+    await handle_new(msg, bot, session_manager, permission_manager)
     msg.reply.assert_called_once()
     assert "Usage" in msg.reply.call_args[0][0]
 
