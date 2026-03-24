@@ -1,5 +1,6 @@
 """Dispatcher factory — assembles middleware, routers, and lifecycle hooks."""
 
+import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
@@ -43,11 +44,34 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     await init_db()
     manager = SessionManager()
     dispatcher["session_manager"] = manager
-    logger.info("Bot startup complete — SessionManager initialized")
+
+    # Resume sessions that were active before bot stopped
+    resumed = await manager.resume_all(bot, settings.group_chat_id)
+    if resumed:
+        logger.info("Resumed %d session(s) from database", resumed)
+
+    # Start health monitoring background task
+    from src.sessions.health import health_check_loop
+    health_task = asyncio.create_task(
+        health_check_loop(manager, bot, settings.group_chat_id)
+    )
+    dispatcher["health_task"] = health_task
+
+    logger.info("Bot startup complete — SessionManager initialized, health monitoring active")
 
 
 async def on_shutdown(dispatcher: Dispatcher) -> None:
-    """Called when polling stops. Stop all active sessions."""
+    """Called when polling stops. Cancel health task and stop all active sessions."""
+    # Cancel health check
+    health_task: asyncio.Task | None = dispatcher.get("health_task")
+    if health_task:
+        health_task.cancel()
+        try:
+            await health_task
+        except asyncio.CancelledError:
+            pass
+
+    # Stop all active sessions
     manager: SessionManager | None = dispatcher.get("session_manager")
     if manager:
         for thread_id, runner in manager.list_all():
@@ -55,4 +79,5 @@ async def on_shutdown(dispatcher: Dispatcher) -> None:
                 await runner.stop()
             except Exception as e:
                 logger.error("Error stopping session %d: %s", thread_id, e)
+
     logger.info("Bot shutting down — all sessions stopped")
