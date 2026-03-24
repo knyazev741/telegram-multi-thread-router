@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Permission System** - `can_use_tool` bridged to Telegram inline buttons (completed 2026-03-24)
 - [x] **Phase 4: Status and UX** - Editable status message, typing indicator, rate-limit safety (completed 2026-03-24)
 - [x] **Phase 5: Voice and File I/O** - Voice transcription, file/photo input, MCP output tools (completed 2026-03-24)
-- [ ] **Phase 6: Multi-Server** - TCP worker routing for remote Claude instances
+- [x] **Phase 6: Multi-Server** - TCP worker routing for remote Claude instances (completed 2026-03-24)
 
 ## Phase Details
 
@@ -138,4 +138,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Permission System | 3/3 | Complete   | 2026-03-24 |
 | 4. Status and UX | 3/3 | Complete   | 2026-03-24 |
 | 5. Voice and File I/O | 3/3 | Complete   | 2026-03-24 |
-| 6. Multi-Server | 2/3 | In Progress|  |
+| 6. Multi-Server | 3/3 | Complete   | 2026-03-24 |

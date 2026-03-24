@@ -73,8 +73,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **MSRV-04**: Worker forwards all SDK events (text, tool use, permission, status) to bot
 - [x] **MSRV-05**: Bot forwards user messages and permission responses to worker
 - [x] **MSRV-06**: Worker auto-reconnects on TCP disconnect with exponential backoff
-- [ ] **MSRV-07**: Bot tracks which server each session runs on
-- [ ] **MSRV-08**: Local sessions also supported (bot runs worker in-process)
+- [x] **MSRV-07**: Bot tracks which server each session runs on
+- [x] **MSRV-08**: Local sessions also supported (bot runs worker in-process)
 
 ## v2 Requirements
 
@@ -151,8 +151,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | MSRV-04 | Phase 6 | Complete |
 | MSRV-05 | Phase 6 | Complete |
 | MSRV-06 | Phase 6 | Complete |
-| MSRV-07 | Phase 6 | Pending |
-| MSRV-08 | Phase 6 | Pending |
+| MSRV-07 | Phase 6 | Complete |
+| MSRV-08 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 40 total
