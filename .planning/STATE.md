@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-02-PLAN.md — PermissionManager DI wiring and callback handler
-last_updated: "2026-03-24T11:25:21.678Z"
+stopped_at: Completed 03-03-PLAN.md — Permission system tests (all PERM-01 through PERM-09)
+last_updated: "2026-03-24T11:30:42.368Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
   percent: 67
 ---
 
@@ -57,6 +57,7 @@ Progress: [███████░░░] 67%
 | Phase 02-session-lifecycle P03 | 3 | 2 tasks | 3 files |
 | Phase 03-permission-system P01 | 2 | 2 tasks | 2 files |
 | Phase 03-permission-system P02 | 2 | 2 tasks | 4 files |
+| Phase 03-permission-system P03 | 4 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,8 @@ Recent decisions affecting current work:
 - [Phase 03-permission-system]: PermissionRuleValue imported from claude_agent_sdk.types (not top-level __init__) — not exported at package level in 0.1.50
 - [Phase 03-permission-system]: asyncio.get_running_loop().create_future() used in PermissionManager per Python 3.14 requirement
 - [Phase 03-permission-system]: In-handler owner guard for callbacks instead of OwnerAuthMiddleware — middleware was designed for Message events; CallbackQuery has different attribute paths
+- [Phase 03-permission-system]: Poll permission_manager._pending in background task to resolve futures during _can_use_tool tests
+- [Phase 03-permission-system]: patch(asyncio.wait_for, side_effect=TimeoutError) for PERM-05 timeout test — instant simulation without real delay
 
 ### Pending Todos
 
@@ -96,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T11:25:21.676Z
-Stopped at: Completed 03-02-PLAN.md — PermissionManager DI wiring and callback handler
+Last session: 2026-03-24T11:30:42.366Z
+Stopped at: Completed 03-03-PLAN.md — Permission system tests (all PERM-01 through PERM-09)
 Resume file: None
