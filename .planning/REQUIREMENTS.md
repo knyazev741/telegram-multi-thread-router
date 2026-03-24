@@ -43,11 +43,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **STAT-01**: Editable status message in thread showing current activity, updated every 30s
 - [x] **STAT-02**: Status includes: current tool, elapsed time, tool call count
-- [ ] **STAT-03**: Claude text output sent as regular messages in correct thread
+- [x] **STAT-03**: Claude text output sent as regular messages in correct thread
 - [x] **STAT-04**: Long messages split at 4096 chars preserving code blocks
 - [x] **STAT-05**: Typing indicator (sendChatAction) renewed every 4s while Claude works
-- [ ] **STAT-06**: ResultMessage triggers status update with final cost/duration summary
-- [ ] **STAT-07**: Error messages displayed with clear formatting in thread
+- [x] **STAT-06**: ResultMessage triggers status update with final cost/duration summary
+- [x] **STAT-07**: Error messages displayed with clear formatting in thread
 
 ### Input Handling
 
@@ -130,11 +130,11 @@ Deferred to future release. Tracked but not in current roadmap.
 | PERM-09 | Phase 3 | Complete |
 | STAT-01 | Phase 4 | Complete |
 | STAT-02 | Phase 4 | Complete |
-| STAT-03 | Phase 4 | Pending |
+| STAT-03 | Phase 4 | Complete |
 | STAT-04 | Phase 4 | Complete |
 | STAT-05 | Phase 4 | Complete |
-| STAT-06 | Phase 4 | Pending |
-| STAT-07 | Phase 4 | Pending |
+| STAT-06 | Phase 4 | Complete |
+| STAT-07 | Phase 4 | Complete |
 | INPT-01 | Phase 2 | Complete |
 | INPT-02 | Phase 5 | Pending |
 | INPT-03 | Phase 5 | Pending |
