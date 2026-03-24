@@ -1,8 +1,16 @@
 """Shared test fixtures."""
 
+import os
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+# Ensure config can be imported in tests without a real .env file.
+# These values are set before any module-level Settings() instantiation.
+os.environ.setdefault("BOT_TOKEN", "test-bot-token")
+os.environ.setdefault("OWNER_USER_ID", "12345")
+os.environ.setdefault("GROUP_CHAT_ID", "-100999")
+os.environ.setdefault("AUTH_TOKEN", "test-auth-token")
 
 OWNER_ID = 12345
 GROUP_CHAT_ID = -100999

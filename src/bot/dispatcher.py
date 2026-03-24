@@ -2,13 +2,14 @@
 
 import logging
 
-from aiogram import Dispatcher
+from aiogram import Bot, Dispatcher
 
 from src.bot.middlewares import OwnerAuthMiddleware
 from src.bot.routers.general import general_router
 from src.bot.routers.session import session_router
 from src.config import settings
 from src.db.schema import init_db
+from src.sessions.manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,21 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
-async def on_startup() -> None:
-    """Called when polling starts. Initialize database."""
+async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
+    """Called when polling starts. Initialize database and SessionManager."""
     await init_db()
-    logger.info("Bot startup complete")
+    manager = SessionManager()
+    dispatcher["session_manager"] = manager
+    logger.info("Bot startup complete — SessionManager initialized")
 
 
-async def on_shutdown() -> None:
-    """Called when polling stops."""
-    logger.info("Bot shutting down")
+async def on_shutdown(dispatcher: Dispatcher) -> None:
+    """Called when polling stops. Stop all active sessions."""
+    manager: SessionManager | None = dispatcher.get("session_manager")
+    if manager:
+        for thread_id, runner in manager.list_all():
+            try:
+                await runner.stop()
+            except Exception as e:
+                logger.error("Error stopping session %d: %s", thread_id, e)
+    logger.info("Bot shutting down — all sessions stopped")
