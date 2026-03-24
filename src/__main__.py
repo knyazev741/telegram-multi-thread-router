@@ -4,10 +4,11 @@ import asyncio
 import logging
 
 import uvloop
-from aiogram import Bot, Dispatcher
+from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
+from src.bot.dispatcher import build_dispatcher
 from src.config import settings
 
 logging.basicConfig(
@@ -24,7 +25,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    dp = Dispatcher()
+    dp = build_dispatcher()
 
     logger.info(
         "Starting bot (owner=%d, group=%d)",
