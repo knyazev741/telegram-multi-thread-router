@@ -70,9 +70,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: `PermissionManager` with `asyncio.Future` bridge, timeout, and stale-button handling
-- [ ] 03-02: Permission message formatter (numbered buttons), callback query handler, and `allowed_tools` allowlist
-- [ ] 03-03: End-to-end validation — multi-turn permission flow, auto-approve safe tools, and timeout auto-deny
+- [ ] 03-01-PLAN.md — PermissionManager + SessionRunner can_use_tool (Future bridge, timeout, auto-allow)
+- [ ] 03-02-PLAN.md — Callback query handler, DI wiring (dispatcher, manager, general router)
+- [ ] 03-03-PLAN.md — Tests covering PERM-01 through PERM-09
 
 ### Phase 4: Status and UX
 **Goal**: Owner sees a live status message per topic and a typing indicator while Claude works; Telegram rate limits are respected
