@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 02-01-PLAN.md — Session engine: SessionRunner, SessionState, DB queries"
-last_updated: "2026-03-24T10:40:07.937Z"
+stopped_at: Completed 02-02-PLAN.md — SessionManager, /new /list /stop commands, message forwarding with 👀 reaction
+last_updated: "2026-03-24T10:46:21.659Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
   percent: 67
 ---
 
@@ -53,6 +53,7 @@ Progress: [███████░░░] 67%
 | Phase 01-foundation P02 | 8 | 2 tasks | 10 files |
 | Phase 01-foundation P03 | 2 | 2 tasks | 4 files |
 | Phase 02-session-lifecycle P01 | 8 | 2 tasks | 7 files |
+| Phase 02-session-lifecycle P02 | 4 | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,8 @@ Recent decisions affecting current work:
 - [Phase 01-foundation]: get_connection() sets synchronous=NORMAL and row_factory=aiosqlite.Row per connection for WAL performance and dict-like row access
 - [Phase 02-session-lifecycle]: Dummy PreToolUse hook registered alongside can_use_tool to prevent SDK issue #18735 — without it can_use_tool silently never fires
 - [Phase 02-session-lifecycle]: stop() sends stop sentinel (None) to queue after interrupt() to unblock queue.get() if runner is IDLE
+- [Phase 02-session-lifecycle]: /clear /compact /reset forwarded as raw text to Claude (not intercepted by Command filter)
+- [Phase 02-session-lifecycle]: tests/conftest.py sets default env vars so config imports work during test collection without real .env
 
 ### Pending Todos
 
@@ -85,6 +88,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T10:40:07.935Z
-Stopped at: Completed 02-01-PLAN.md — Session engine: SessionRunner, SessionState, DB queries
+Last session: 2026-03-24T10:46:21.657Z
+Stopped at: Completed 02-02-PLAN.md — SessionManager, /new /list /stop commands, message forwarding with 👀 reaction
 Resume file: None

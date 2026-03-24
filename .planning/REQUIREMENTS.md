@@ -17,9 +17,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Session Lifecycle
 
-- [ ] **SESS-01**: User can create a new session linked to a forum topic with `/new <name> <workdir> [server]`
-- [ ] **SESS-02**: User can list active sessions with status via `/list` command
-- [ ] **SESS-03**: User can stop a session via `/stop` command in the topic
+- [x] **SESS-01**: User can create a new session linked to a forum topic with `/new <name> <workdir> [server]`
+- [x] **SESS-02**: User can list active sessions with status via `/list` command
+- [x] **SESS-03**: User can stop a session via `/stop` command in the topic
 - [x] **SESS-04**: ClaudeSDKClient instance created per session with correct cwd, model, system_prompt
 - [x] **SESS-05**: Session state machine: idle → running → waiting_permission → running → idle
 - [x] **SESS-06**: Session persists session_id to SQLite for resume capability
@@ -51,12 +51,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Input Handling
 
-- [ ] **INPT-01**: Text messages in topic forwarded to session via `client.query()`
+- [x] **INPT-01**: Text messages in topic forwarded to session via `client.query()`
 - [ ] **INPT-02**: Voice messages transcribed via faster-whisper, text sent to session
 - [ ] **INPT-03**: Photos downloaded and path passed to Claude session
 - [ ] **INPT-04**: Documents downloaded and path passed to Claude session
-- [ ] **INPT-05**: Slash commands (/clear, /compact, /reset) forwarded to Claude session
-- [ ] **INPT-06**: 👀 reaction on message when delivered to session
+- [x] **INPT-05**: Slash commands (/clear, /compact, /reset) forwarded to Claude session
+- [x] **INPT-06**: 👀 reaction on message when delivered to session
 
 ### File Output
 
@@ -110,9 +110,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | FOUND-03 | Phase 1 | Complete |
 | FOUND-04 | Phase 1 | Complete |
 | FOUND-05 | Phase 1 | Complete |
-| SESS-01 | Phase 2 | Pending |
-| SESS-02 | Phase 2 | Pending |
-| SESS-03 | Phase 2 | Pending |
+| SESS-01 | Phase 2 | Complete |
+| SESS-02 | Phase 2 | Complete |
+| SESS-03 | Phase 2 | Complete |
 | SESS-04 | Phase 2 | Complete |
 | SESS-05 | Phase 2 | Complete |
 | SESS-06 | Phase 2 | Complete |
@@ -135,12 +135,12 @@ Deferred to future release. Tracked but not in current roadmap.
 | STAT-05 | Phase 4 | Pending |
 | STAT-06 | Phase 4 | Pending |
 | STAT-07 | Phase 4 | Pending |
-| INPT-01 | Phase 2 | Pending |
+| INPT-01 | Phase 2 | Complete |
 | INPT-02 | Phase 5 | Pending |
 | INPT-03 | Phase 5 | Pending |
 | INPT-04 | Phase 5 | Pending |
-| INPT-05 | Phase 2 | Pending |
-| INPT-06 | Phase 2 | Pending |
+| INPT-05 | Phase 2 | Complete |
+| INPT-06 | Phase 2 | Complete |
 | FILE-01 | Phase 5 | Pending |
 | FILE-02 | Phase 5 | Pending |
 | FILE-03 | Phase 5 | Pending |
