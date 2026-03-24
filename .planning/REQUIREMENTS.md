@@ -68,8 +68,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Multi-Server
 
 - [ ] **MSRV-01**: Worker process runs on remote server, manages ClaudeSDKClient locally
-- [ ] **MSRV-02**: Worker connects to central bot via authenticated TCP (auth_token)
-- [ ] **MSRV-03**: TCP protocol: length-prefixed msgspec-encoded messages
+- [x] **MSRV-02**: Worker connects to central bot via authenticated TCP (auth_token)
+- [x] **MSRV-03**: TCP protocol: length-prefixed msgspec-encoded messages
 - [ ] **MSRV-04**: Worker forwards all SDK events (text, tool use, permission, status) to bot
 - [ ] **MSRV-05**: Bot forwards user messages and permission responses to worker
 - [ ] **MSRV-06**: Worker auto-reconnects on TCP disconnect with exponential backoff
@@ -146,8 +146,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | FILE-03 | Phase 5 | Complete |
 | FILE-04 | Phase 5 | Complete |
 | MSRV-01 | Phase 6 | Pending |
-| MSRV-02 | Phase 6 | Pending |
-| MSRV-03 | Phase 6 | Pending |
+| MSRV-02 | Phase 6 | Complete |
+| MSRV-03 | Phase 6 | Complete |
 | MSRV-04 | Phase 6 | Pending |
 | MSRV-05 | Phase 6 | Pending |
 | MSRV-06 | Phase 6 | Pending |
