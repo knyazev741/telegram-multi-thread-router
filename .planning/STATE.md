@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-01-PLAN.md — voice transcription and MCP tools factory
-last_updated: "2026-03-24T12:41:18.102Z"
+stopped_at: Completed 05-02-PLAN.md — voice/file handlers and MCP wiring
+last_updated: "2026-03-24T12:44:28.198Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 15
-  completed_plans: 13
+  completed_plans: 14
   percent: 67
 ---
 
@@ -62,6 +62,7 @@ Progress: [███████░░░] 67%
 | Phase 04-status-and-ux P02 | 2 | 1 tasks | 1 files |
 | Phase 04-status-and-ux P03 | 4 | 2 tasks | 2 files |
 | Phase 05-voice-and-file-io P01 | 2 | 2 tasks | 3 files |
+| Phase 05-voice-and-file-io P02 | 2 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,7 @@ Recent decisions affecting current work:
 - [Phase 04-status-and-ux]: AsyncMock bot with .message_id attribute used as shared test helper pattern for aiogram testing
 - [Phase 05-voice-and-file-io]: Used @tool decorator (not @server.tool()) — create_sdk_mcp_server accepts tools list at construction, not via method chaining
 - [Phase 05-voice-and-file-io]: Semaphore(1) at module level in voice.py prevents concurrent WhisperModel transcriptions (OOM prevention on CPU)
+- [Phase 05-voice-and-file-io]: Voice handlers use tempfile + finally block for safe OGG cleanup; content-type handlers registered before catch-all in session router; MCP server created at _run() start for fresh binding per session
 
 ### Pending Todos
 
@@ -110,6 +112,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T12:41:18.099Z
-Stopped at: Completed 05-01-PLAN.md — voice transcription and MCP tools factory
+Last session: 2026-03-24T12:44:28.196Z
+Stopped at: Completed 05-02-PLAN.md — voice/file handlers and MCP wiring
 Resume file: None

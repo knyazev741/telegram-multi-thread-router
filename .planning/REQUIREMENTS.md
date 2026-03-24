@@ -53,8 +53,8 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **INPT-01**: Text messages in topic forwarded to session via `client.query()`
 - [x] **INPT-02**: Voice messages transcribed via faster-whisper, text sent to session
-- [ ] **INPT-03**: Photos downloaded and path passed to Claude session
-- [ ] **INPT-04**: Documents downloaded and path passed to Claude session
+- [x] **INPT-03**: Photos downloaded and path passed to Claude session
+- [x] **INPT-04**: Documents downloaded and path passed to Claude session
 - [x] **INPT-05**: Slash commands (/clear, /compact, /reset) forwarded to Claude session
 - [x] **INPT-06**: 👀 reaction on message when delivered to session
 
@@ -137,8 +137,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | STAT-07 | Phase 4 | Complete |
 | INPT-01 | Phase 2 | Complete |
 | INPT-02 | Phase 5 | Complete |
-| INPT-03 | Phase 5 | Pending |
-| INPT-04 | Phase 5 | Pending |
+| INPT-03 | Phase 5 | Complete |
+| INPT-04 | Phase 5 | Complete |
 | INPT-05 | Phase 2 | Complete |
 | INPT-06 | Phase 2 | Complete |
 | FILE-01 | Phase 5 | Complete |
