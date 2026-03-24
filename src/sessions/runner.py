@@ -24,6 +24,7 @@ from aiogram.exceptions import TelegramRetryAfter
 
 from src.sessions.state import SessionState
 from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
+from src.sessions.mcp_tools import create_telegram_mcp_server
 from src.db.queries import update_session_id, update_session_state
 from src.bot.status import StatusUpdater
 from src.bot.output import split_message, TypingIndicator
@@ -82,6 +83,7 @@ class SessionRunner:
     async def _run(self) -> None:
         """Main loop: own the ClaudeSDKClient context, process messages from queue."""
         system_prompt = _build_system_prompt(self.workdir)
+        mcp_server = create_telegram_mcp_server(self._bot, self._chat_id, self.thread_id)
         options = ClaudeAgentOptions(
             cwd=self.workdir,
             model=self.model,
@@ -90,6 +92,7 @@ class SessionRunner:
             hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_dummy_pretool_hook])]},
             resume=self.session_id,
             include_partial_messages=True,
+            mcp_servers={"telegram": mcp_server},
         )
         try:
             async with ClaudeSDKClient(options=options) as client:
