@@ -38,23 +38,21 @@ created: 2026-03-24
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 1-01-01 | 01 | 1 | FOUND-01 | integration | `python -m pytest tests/test_bot_startup.py -v` | ❌ W0 | ⬜ pending |
-| 1-02-01 | 02 | 1 | FOUND-02 | unit | `python -m pytest tests/test_auth_middleware.py -v` | ❌ W0 | ⬜ pending |
-| 1-02-02 | 02 | 1 | FOUND-04 | unit | `python -m pytest tests/test_topic_router.py -v` | ❌ W0 | ⬜ pending |
-| 1-02-03 | 02 | 1 | FOUND-05 | unit | `python -m pytest tests/test_general_topic.py -v` | ❌ W0 | ⬜ pending |
-| 1-03-01 | 03 | 1 | FOUND-03 | unit | `python -m pytest tests/test_database.py -v` | ❌ W0 | ⬜ pending |
+| 1-01-01 | 01 | 1 | FOUND-01 | integration | `python -m pytest tests/test_bot_startup.py -v` | W0 | pending |
+| 1-02-01 | 02 | 2 | FOUND-02 | unit | `python -m pytest tests/test_middleware.py -v` | W0 | pending |
+| 1-02-02 | 02 | 2 | FOUND-04, FOUND-05 | unit | `python -m pytest tests/test_router.py -v` | W0 | pending |
+| 1-03-01 | 03 | 3 | FOUND-03 | unit | `python -m pytest tests/test_db.py -v` | W0 | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
 ## Wave 0 Requirements
 
 - [ ] `tests/test_bot_startup.py` — stubs for FOUND-01
-- [ ] `tests/test_auth_middleware.py` — stubs for FOUND-02
-- [ ] `tests/test_topic_router.py` — stubs for FOUND-04
-- [ ] `tests/test_general_topic.py` — stubs for FOUND-05
-- [ ] `tests/test_database.py` — stubs for FOUND-03
+- [ ] `tests/test_middleware.py` — stubs for FOUND-02
+- [ ] `tests/test_router.py` — stubs for FOUND-04, FOUND-05
+- [ ] `tests/test_db.py` — stubs for FOUND-03
 - [ ] `tests/conftest.py` — shared fixtures (mock bot, mock update)
 - [ ] `pytest` + `pytest-asyncio` in dev dependencies
 
