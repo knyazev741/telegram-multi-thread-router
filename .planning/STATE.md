@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-03-PLAN.md — Permission system tests (all PERM-01 through PERM-09)
-last_updated: "2026-03-24T11:35:21.980Z"
+stopped_at: Completed 04-01-PLAN.md — StatusUpdater and output utilities
+last_updated: "2026-03-24T11:54:20.959Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 12
+  completed_plans: 10
   percent: 67
 ---
 
@@ -58,6 +58,7 @@ Progress: [███████░░░] 67%
 | Phase 03-permission-system P01 | 2 | 2 tasks | 2 files |
 | Phase 03-permission-system P02 | 2 | 2 tasks | 4 files |
 | Phase 03-permission-system P03 | 4 | 2 tasks | 3 files |
+| Phase 04-status-and-ux P01 | 2 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ Recent decisions affecting current work:
 - [Phase 03-permission-system]: In-handler owner guard for callbacks instead of OwnerAuthMiddleware — middleware was designed for Message events; CallbackQuery has different attribute paths
 - [Phase 03-permission-system]: Poll permission_manager._pending in background task to resolve futures during _can_use_tool tests
 - [Phase 03-permission-system]: patch(asyncio.wait_for, side_effect=TimeoutError) for PERM-05 timeout test — instant simulation without real delay
+- [Phase 04-status-and-ux]: StatusUpdater uses time.monotonic() for drift-resistant elapsed calculation; finalize() uses call_later(30,...) to schedule deletion without blocking
+- [Phase 04-status-and-ux]: split_message splits at \n``` boundary first to preserve code blocks, then newline, then hard split
 
 ### Pending Todos
 
@@ -99,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T11:30:42.366Z
-Stopped at: Completed 03-03-PLAN.md — Permission system tests (all PERM-01 through PERM-09)
+Last session: 2026-03-24T11:54:20.957Z
+Stopped at: Completed 04-01-PLAN.md — StatusUpdater and output utilities
 Resume file: None
