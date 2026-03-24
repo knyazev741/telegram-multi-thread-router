@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A message sent in a forum topic produces the correct `message_thread_id` in logs, proving routing resolves to the right session slot
   4. SQLite database file exists with WAL mode enabled and correct schema (topics, sessions, message_history tables)
   5. General topic (thread_id=1) receives management commands and responds — other topics do not receive each other's messages
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 01-01: Project scaffold, dependencies, and bot startup (aiogram 3 + uvloop + aiosqlite)
@@ -49,7 +49,7 @@ Plans:
   4. Owner types `/stop` in a session topic — Claude is interrupted cleanly and the session transitions to stopped state
   5. Bot restarts — all sessions with saved `session_id` in SQLite auto-resume without losing working directory context
   6. A Claude subprocess that becomes unresponsive is detected by health monitoring and cleaned up, with the topic notified
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 02-01: `ClaudeSDKClient` wrapper, `SessionRunner` state machine (IDLE/RUNNING/INTERRUPTING/STOPPED), and dummy PreToolUse hook
@@ -67,7 +67,7 @@ Plans:
   4. Owner taps "Allow always" — that tool pattern is added to `allowed_tools` and subsequent calls to that tool are auto-approved without prompting
   5. Read, Glob, Grep, and Explore agent tool calls are auto-approved without any Telegram prompt appearing
   6. Tapping a button on an expired permission request shows "This permission has expired" instead of crashing
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 03-01: `PermissionManager` with `asyncio.Future` bridge, timeout, and stale-button handling
@@ -84,7 +84,7 @@ Plans:
   3. Claude's text output arrives as regular messages in the correct topic, with messages longer than 4096 characters split at code-block boundaries
   4. When a session completes, the status message shows final cost, duration, and total tool calls
   5. Error conditions (SDK crash, connection loss) produce a clearly formatted error message in the topic instead of silent failure
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 04-01: `StatusUpdater` — editable status message, 30s refresh loop, `TelegramRetryAfter` handling
@@ -101,7 +101,7 @@ Plans:
   3. Claude calls the `reply` MCP tool with a message string — a Telegram message appears in the correct topic
   4. Claude calls the `send_file` MCP tool with a file path — that file appears as a Telegram document in the session topic
   5. Claude calls the `react` or `edit_message` MCP tool — the reaction or edit appears in Telegram within 2 seconds
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 05-01: faster-whisper integration — async transcription via `run_in_executor`, semaphore guard against concurrent OOM
@@ -119,7 +119,7 @@ Plans:
   4. If the TCP connection drops, the worker reconnects automatically with exponential backoff — no manual intervention required
   5. `/list` shows which server each session is running on
   6. A local session (no server specified) still works through the in-process path without requiring a TCP worker
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 06-01: TCP protocol — length-prefixed msgspec-encoded frames, auth handshake, worker registration
