@@ -10,10 +10,10 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Foundation
 
 - [x] **FOUND-01**: Bot starts with aiogram 3 long polling and connects to configured group chat
-- [ ] **FOUND-02**: Bot only processes messages from OWNER_USER_ID
+- [x] **FOUND-02**: Bot only processes messages from OWNER_USER_ID
 - [ ] **FOUND-03**: SQLite database with WAL mode stores topics, sessions, and message history
-- [ ] **FOUND-04**: Forum topic routing: messages dispatched by message_thread_id to correct session
-- [ ] **FOUND-05**: Bot handles General topic (thread_id=1) for management commands
+- [x] **FOUND-04**: Forum topic routing: messages dispatched by message_thread_id to correct session
+- [x] **FOUND-05**: Bot handles General topic (thread_id=1) for management commands
 
 ### Session Lifecycle
 
@@ -106,10 +106,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | FOUND-01 | Phase 1 | Complete |
-| FOUND-02 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Complete |
 | FOUND-03 | Phase 1 | Pending |
-| FOUND-04 | Phase 1 | Pending |
-| FOUND-05 | Phase 1 | Pending |
+| FOUND-04 | Phase 1 | Complete |
+| FOUND-05 | Phase 1 | Complete |
 | SESS-01 | Phase 2 | Pending |
 | SESS-02 | Phase 2 | Pending |
 | SESS-03 | Phase 2 | Pending |

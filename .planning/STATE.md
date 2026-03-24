@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: executing
+stopped_at: Completed 01-02-PLAN.md — auth middleware and forum topic routing
+last_updated: "2026-03-24T10:04:31.556Z"
+last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
+progress:
+  total_phases: 6
+  completed_phases: 0
+  total_plans: 3
+  completed_plans: 2
+  percent: 67
+---
+
 # Project State
 
 ## Project Reference
@@ -14,7 +30,7 @@ Plan: 1 of 3 in current phase
 Status: In progress
 Last activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 
-Progress: [█░░░░░░░░░] 6%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
@@ -34,6 +50,7 @@ Progress: [█░░░░░░░░░] 6%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 01-foundation P02 | 8 | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -47,6 +64,8 @@ Recent decisions affecting current work:
 - [Roadmap]: INPT-01, INPT-05, INPT-06 assigned to Phase 2 (core text routing needed for session lifecycle); INPT-02, INPT-03, INPT-04 assigned to Phase 5
 - [01-01]: Added extra="ignore" to pydantic-settings BaseSettings to handle legacy .env variables gracefully without validation errors
 - [01-01]: User must add GROUP_CHAT_ID to their .env — new required field not present in old Node.js .env
+- [Phase 01-02]: General topic filter uses F.message_thread_id.in_({1, None}) defensively — Phase 2 live testing will confirm actual value
+- [Phase 01-02]: OwnerAuthMiddleware registered as outer_middleware at dispatcher level (not per-router) so auth fires before any filter evaluation
 
 ### Pending Todos
 
@@ -60,6 +79,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24
-Stopped at: Completed 01-01-PLAN.md — Python scaffold created, Node.js codebase deleted
+Last session: 2026-03-24T10:04:31.553Z
+Stopped at: Completed 01-02-PLAN.md — auth middleware and forum topic routing
 Resume file: None
