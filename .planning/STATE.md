@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-03-PLAN.md — status and output test suite
-last_updated: "2026-03-24T12:04:20.002Z"
+stopped_at: Completed 05-01-PLAN.md — voice transcription and MCP tools factory
+last_updated: "2026-03-24T12:41:18.102Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 15
+  completed_plans: 13
   percent: 67
 ---
 
@@ -61,6 +61,7 @@ Progress: [███████░░░] 67%
 | Phase 04-status-and-ux P01 | 2 | 2 tasks | 2 files |
 | Phase 04-status-and-ux P02 | 2 | 1 tasks | 1 files |
 | Phase 04-status-and-ux P03 | 4 | 2 tasks | 2 files |
+| Phase 05-voice-and-file-io P01 | 2 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,8 @@ Recent decisions affecting current work:
 - [Phase 04-status-and-ux]: StatusUpdater and TypingIndicator created per-turn in _run() (not per-session) so each query gets a fresh status message and finalize() is called exactly once per turn
 - [Phase 04-status-and-ux]: test_error_format uses inspect.getsource to confirm STAT-07 wiring without executing runner logic
 - [Phase 04-status-and-ux]: AsyncMock bot with .message_id attribute used as shared test helper pattern for aiogram testing
+- [Phase 05-voice-and-file-io]: Used @tool decorator (not @server.tool()) — create_sdk_mcp_server accepts tools list at construction, not via method chaining
+- [Phase 05-voice-and-file-io]: Semaphore(1) at module level in voice.py prevents concurrent WhisperModel transcriptions (OOM prevention on CPU)
 
 ### Pending Todos
 
@@ -107,6 +110,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T12:01:09.768Z
-Stopped at: Completed 04-03-PLAN.md — status and output test suite
+Last session: 2026-03-24T12:41:18.099Z
+Stopped at: Completed 05-01-PLAN.md — voice transcription and MCP tools factory
 Resume file: None

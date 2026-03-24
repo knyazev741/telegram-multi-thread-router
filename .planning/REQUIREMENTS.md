@@ -52,7 +52,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Input Handling
 
 - [x] **INPT-01**: Text messages in topic forwarded to session via `client.query()`
-- [ ] **INPT-02**: Voice messages transcribed via faster-whisper, text sent to session
+- [x] **INPT-02**: Voice messages transcribed via faster-whisper, text sent to session
 - [ ] **INPT-03**: Photos downloaded and path passed to Claude session
 - [ ] **INPT-04**: Documents downloaded and path passed to Claude session
 - [x] **INPT-05**: Slash commands (/clear, /compact, /reset) forwarded to Claude session
@@ -60,10 +60,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### File Output
 
-- [ ] **FILE-01**: Custom MCP tool `reply` sends text message to Telegram thread
-- [ ] **FILE-02**: Custom MCP tool `send_file` sends file/photo back to Telegram thread
-- [ ] **FILE-03**: Custom MCP tool `react` adds emoji reaction to a message
-- [ ] **FILE-04**: Custom MCP tool `edit_message` edits a previously sent message
+- [x] **FILE-01**: Custom MCP tool `reply` sends text message to Telegram thread
+- [x] **FILE-02**: Custom MCP tool `send_file` sends file/photo back to Telegram thread
+- [x] **FILE-03**: Custom MCP tool `react` adds emoji reaction to a message
+- [x] **FILE-04**: Custom MCP tool `edit_message` edits a previously sent message
 
 ### Multi-Server
 
@@ -136,15 +136,15 @@ Deferred to future release. Tracked but not in current roadmap.
 | STAT-06 | Phase 4 | Complete |
 | STAT-07 | Phase 4 | Complete |
 | INPT-01 | Phase 2 | Complete |
-| INPT-02 | Phase 5 | Pending |
+| INPT-02 | Phase 5 | Complete |
 | INPT-03 | Phase 5 | Pending |
 | INPT-04 | Phase 5 | Pending |
 | INPT-05 | Phase 2 | Complete |
 | INPT-06 | Phase 2 | Complete |
-| FILE-01 | Phase 5 | Pending |
-| FILE-02 | Phase 5 | Pending |
-| FILE-03 | Phase 5 | Pending |
-| FILE-04 | Phase 5 | Pending |
+| FILE-01 | Phase 5 | Complete |
+| FILE-02 | Phase 5 | Complete |
+| FILE-03 | Phase 5 | Complete |
+| FILE-04 | Phase 5 | Complete |
 | MSRV-01 | Phase 6 | Pending |
 | MSRV-02 | Phase 6 | Pending |
 | MSRV-03 | Phase 6 | Pending |
