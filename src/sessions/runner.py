@@ -1,5 +1,7 @@
 """SessionRunner — owns one ClaudeSDKClient per session with state machine and message queue."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from pathlib import Path
@@ -11,11 +13,15 @@ from claude_agent_sdk import (
     ResultMessage,
     TextBlock,
     PermissionResultAllow,
+    PermissionResultDeny,
+    PermissionUpdate,
     HookMatcher,
 )
+from claude_agent_sdk.types import PermissionRuleValue
 from aiogram import Bot
 
 from src.sessions.state import SessionState
+from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
 from src.db.queries import update_session_id, update_session_state
 
 logger = logging.getLogger(__name__)
@@ -24,11 +30,6 @@ logger = logging.getLogger(__name__)
 async def _dummy_pretool_hook(input_data, tool_use_id, context):
     """Required PreToolUse hook — without this, can_use_tool never fires (SDK issue #18735)."""
     return {"continue_": True}
-
-
-async def _auto_allow_tool(tool_name, input_data, context):
-    """Phase 2 placeholder: auto-approve all tools. Phase 3 replaces with Telegram permission UI."""
-    return PermissionResultAllow(updated_input=input_data)
 
 
 def _build_system_prompt(workdir: str) -> str:
@@ -51,6 +52,7 @@ class SessionRunner:
         workdir: str,
         bot: Bot,
         chat_id: int,
+        permission_manager: PermissionManager,
         session_id: str | None = None,
         model: str | None = None,
     ) -> None:
@@ -60,6 +62,8 @@ class SessionRunner:
         self.model = model
         self._bot = bot
         self._chat_id = chat_id
+        self._permission_manager = permission_manager
+        self._allowed_tools: set[str] = {"Read", "Glob", "Grep", "Agent"}  # PERM-07 default safe tools
         self.state = SessionState.IDLE
         self._client: ClaudeSDKClient | None = None
         self._message_queue: asyncio.Queue[str | None] = asyncio.Queue()  # None is stop sentinel
@@ -76,7 +80,7 @@ class SessionRunner:
             cwd=self.workdir,
             model=self.model,
             system_prompt=system_prompt,
-            can_use_tool=_auto_allow_tool,
+            can_use_tool=self._can_use_tool,
             hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_dummy_pretool_hook])]},
             resume=self.session_id,
             include_partial_messages=True,
@@ -109,6 +113,65 @@ class SessionRunner:
                 logger.exception("Failed to send error message to thread %d", self.thread_id)
         finally:
             self._client = None
+
+    async def _can_use_tool(
+        self,
+        tool_name: str,
+        input_data: dict,
+        context,
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """Permission callback — auto-approves safe tools, prompts user for others via Telegram.
+
+        Auto-approved tools: Read, Glob, Grep, Agent (PERM-07).
+        Awaits user response via asyncio.Future with 5-minute timeout (PERM-05).
+        "Allow always" updates both Python-side set and SDK permission engine (PERM-06).
+        """
+        # Auto-approve pre-approved tools without prompting (PERM-07)
+        if tool_name in self._allowed_tools:
+            return PermissionResultAllow(updated_input=input_data)
+
+        # Transition to WAITING_PERMISSION state
+        prev_state = self.state
+        self.state = SessionState.WAITING_PERMISSION
+
+        request_id, future = self._permission_manager.create_request()
+        await self._bot.send_message(
+            chat_id=self._chat_id,
+            message_thread_id=self.thread_id,
+            text=format_permission_message(tool_name, input_data),
+            parse_mode="HTML",
+            reply_markup=build_permission_keyboard(request_id),
+        )
+
+        try:
+            action = await asyncio.wait_for(future, timeout=300.0)
+        except asyncio.TimeoutError:
+            self._permission_manager.expire(request_id)
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                message_thread_id=self.thread_id,
+                text="\u23f1 Permission timed out \u2014 denied",
+            )
+            return PermissionResultDeny(message="Timed out \u2014 user did not respond within 5 minutes")
+        finally:
+            self.state = prev_state  # always restore state (Pitfall 4)
+
+        if action == "allow":
+            return PermissionResultAllow(updated_input=input_data)
+        elif action == "always":
+            self._allowed_tools.add(tool_name)
+            return PermissionResultAllow(
+                updated_input=input_data,
+                updated_permissions=[
+                    PermissionUpdate(
+                        type="addRules",
+                        rules=[PermissionRuleValue(tool_name=tool_name)],
+                        behavior="allow",
+                    )
+                ],
+            )
+        else:  # "deny"
+            return PermissionResultDeny(message="Denied by user")
 
     async def _drain_response(self, client: ClaudeSDKClient) -> None:
         """Receive all messages from the current turn, forwarding text to Telegram."""
