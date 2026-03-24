@@ -104,9 +104,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 05-01: faster-whisper integration — async transcription via `run_in_executor`, semaphore guard against concurrent OOM
-- [ ] 05-02: Photo and document download handler — save to session cwd, pass path to Claude via `client.query()`
-- [ ] 05-03: Custom MCP tools (`reply`, `send_file`, `react`, `edit_message`) registered via `create_sdk_mcp_server()`
+- [ ] 05-01-PLAN.md — Voice transcription module (faster-whisper) + MCP tools factory (4 Telegram output tools)
+- [ ] 05-02-PLAN.md — Wire voice/photo/doc handlers into session router + MCP server into SessionRunner
+- [ ] 05-03-PLAN.md — Tests for INPT-02, INPT-03, INPT-04, FILE-01 through FILE-04
 
 ### Phase 6: Multi-Server
 **Goal**: Workers running on remote servers connect to the central bot via authenticated TCP; session routing is transparent from the owner's perspective
