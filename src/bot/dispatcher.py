@@ -8,6 +8,7 @@ from src.bot.middlewares import OwnerAuthMiddleware
 from src.bot.routers.general import general_router
 from src.bot.routers.session import session_router
 from src.config import settings
+from src.db.schema import init_db
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,8 @@ def build_dispatcher() -> Dispatcher:
 
 
 async def on_startup() -> None:
-    """Called when polling starts. Initialize database here in Plan 01-03."""
+    """Called when polling starts. Initialize database."""
+    await init_db()
     logger.info("Bot startup complete")
 
 
