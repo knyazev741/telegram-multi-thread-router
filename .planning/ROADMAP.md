@@ -122,9 +122,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 06-01: TCP protocol — length-prefixed msgspec-encoded frames, auth handshake, worker registration
-- [ ] 06-02: Worker process (`worker.py`) — `ClaudeSDKClient` management, event forwarding, permission relay
-- [ ] 06-03: Bot-side worker registry — session-to-worker routing, reconnect handling, in-process fallback
+- [ ] 06-01-PLAN.md — TCP protocol (msgspec Structs + framing), IPC server, WorkerRegistry, config/dispatcher wiring
+- [ ] 06-02-PLAN.md — Worker process: WorkerOutputChannel, WorkerClient TCP loop, permission bridge, entry point
+- [ ] 06-03-PLAN.md — Bot-side routing: RemoteSession proxy, SessionManager extension, /new /list updates, tests
 
 ## Progress
 
