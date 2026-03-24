@@ -173,6 +173,7 @@ async def _handle_worker(
                     orig_request_id: str,
                     perm_future: asyncio.Future,
                     w_id: str,
+                    worker_request_id: str,
                 ) -> None:
                     try:
                         result = await asyncio.wait_for(perm_future, timeout=300.0)
@@ -180,12 +181,12 @@ async def _handle_worker(
                         result = "deny"
                         permission_manager.expire(orig_request_id)
                     response = PermissionResponseMsg(
-                        request_id=msg.request_id, action=result
+                        request_id=worker_request_id, action=result
                     )
                     await worker_registry.send_to(w_id, response)
 
                 asyncio.create_task(
-                    _await_permission(_request_id, future, worker_id)
+                    _await_permission(_request_id, future, worker_id, msg.request_id)
                 )
 
             elif isinstance(msg, StatusUpdateMsg):
