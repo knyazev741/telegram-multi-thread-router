@@ -87,9 +87,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: `StatusUpdater` — editable status message, 30s refresh loop, `TelegramRetryAfter` handling
-- [ ] 04-02: Typing indicator background task, Claude output message splitter (4096 chars, code-block-aware)
-- [ ] 04-03: `ResultMessage` handler (final summary), error message formatter, and session-end state cleanup
+- [ ] 04-01-PLAN.md — StatusUpdater class, message splitter, typing indicator utilities
+- [ ] 04-02-PLAN.md — Wire status/typing/splitter into SessionRunner._drain_response + error formatting
+- [ ] 04-03-PLAN.md — Tests for STAT-01 through STAT-07
 
 ### Phase 5: Voice and File I/O
 **Goal**: Owner can send voice messages, photos, and files to Claude sessions; Claude can send files back via MCP tools
