@@ -23,8 +23,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **SESS-04**: ClaudeSDKClient instance created per session with correct cwd, model, system_prompt
 - [x] **SESS-05**: Session state machine: idle → running → waiting_permission → running → idle
 - [x] **SESS-06**: Session persists session_id to SQLite for resume capability
-- [ ] **SESS-07**: Bot auto-resumes all saved sessions on startup
-- [ ] **SESS-08**: Health monitoring detects zombie Claude processes and cleans up
+- [x] **SESS-07**: Bot auto-resumes all saved sessions on startup
+- [x] **SESS-08**: Health monitoring detects zombie Claude processes and cleans up
 - [x] **SESS-09**: User can interrupt running Claude via `/stop` or dedicated button
 
 ### Permission System
@@ -116,8 +116,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | SESS-04 | Phase 2 | Complete |
 | SESS-05 | Phase 2 | Complete |
 | SESS-06 | Phase 2 | Complete |
-| SESS-07 | Phase 2 | Pending |
-| SESS-08 | Phase 2 | Pending |
+| SESS-07 | Phase 2 | Complete |
+| SESS-08 | Phase 2 | Complete |
 | SESS-09 | Phase 2 | Complete |
 | PERM-01 | Phase 3 | Pending |
 | PERM-02 | Phase 3 | Pending |

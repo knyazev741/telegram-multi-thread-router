@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-02-PLAN.md — SessionManager, /new /list /stop commands, message forwarding with 👀 reaction
-last_updated: "2026-03-24T10:46:21.659Z"
+stopped_at: Completed 02-03-PLAN.md — session persistence with resume_all and health_check_loop
+last_updated: "2026-03-24T10:51:11.384Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
   percent: 67
 ---
 
@@ -54,6 +54,7 @@ Progress: [███████░░░] 67%
 | Phase 01-foundation P03 | 2 | 2 tasks | 4 files |
 | Phase 02-session-lifecycle P01 | 8 | 2 tasks | 7 files |
 | Phase 02-session-lifecycle P02 | 4 | 1 tasks | 6 files |
+| Phase 02-session-lifecycle P03 | 3 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,8 @@ Recent decisions affecting current work:
 - [Phase 02-session-lifecycle]: stop() sends stop sentinel (None) to queue after interrupt() to unblock queue.get() if runner is IDLE
 - [Phase 02-session-lifecycle]: /clear /compact /reset forwarded as raw text to Claude (not intercepted by Command filter)
 - [Phase 02-session-lifecycle]: tests/conftest.py sets default env vars so config imports work during test collection without real .env
+- [Phase 02-session-lifecycle]: health_check_loop uses runner.is_alive (task.done() check) for zombie detection — no internal SDK dependency
+- [Phase 02-session-lifecycle]: health_task stored in dispatcher dict for clean cancellation in on_shutdown
 
 ### Pending Todos
 
@@ -88,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T10:46:21.657Z
-Stopped at: Completed 02-02-PLAN.md — SessionManager, /new /list /stop commands, message forwarding with 👀 reaction
+Last session: 2026-03-24T10:51:11.382Z
+Stopped at: Completed 02-03-PLAN.md — session persistence with resume_all and health_check_loop
 Resume file: None
