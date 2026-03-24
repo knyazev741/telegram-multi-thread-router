@@ -12,7 +12,7 @@ A clean Python rewrite of a Node.js bot that proxied Claude sessions through tmu
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** - Bot scaffold, forum topic routing, and SQLite persistence
+- [x] **Phase 1: Foundation** - Bot scaffold, forum topic routing, and SQLite persistence (completed 2026-03-24)
 - [ ] **Phase 2: Session Lifecycle** - Create, run, stop, and resume Claude sessions
 - [ ] **Phase 3: Permission System** - `can_use_tool` bridged to Telegram inline buttons
 - [ ] **Phase 4: Status and UX** - Editable status message, typing indicator, rate-limit safety
@@ -133,7 +133,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 2/3 | In Progress|  |
+| 1. Foundation | 3/3 | Complete   | 2026-03-24 |
 | 2. Session Lifecycle | 0/3 | Not started | - |
 | 3. Permission System | 0/3 | Not started | - |
 | 4. Status and UX | 0/3 | Not started | - |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-02-PLAN.md — auth middleware and forum topic routing
-last_updated: "2026-03-24T10:04:31.556Z"
+stopped_at: Completed 01-03-PLAN.md — SQLite persistence layer with WAL mode
+last_updated: "2026-03-24T10:07:49.056Z"
 last_activity: 2026-03-24 — Completed plan 01-01 (Python scaffold, deleted Node.js codebase)
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
   percent: 67
 ---
 
@@ -51,6 +51,7 @@ Progress: [███████░░░] 67%
 
 *Updated after each plan completion*
 | Phase 01-foundation P02 | 8 | 2 tasks | 10 files |
+| Phase 01-foundation P03 | 2 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,8 @@ Recent decisions affecting current work:
 - [01-01]: User must add GROUP_CHAT_ID to their .env — new required field not present in old Node.js .env
 - [Phase 01-02]: General topic filter uses F.message_thread_id.in_({1, None}) defensively — Phase 2 live testing will confirm actual value
 - [Phase 01-02]: OwnerAuthMiddleware registered as outer_middleware at dispatcher level (not per-router) so auth fires before any filter evaluation
+- [Phase 01-foundation]: WAL mode set before schema creation in init_db() — ensures WAL is established before any table writes
+- [Phase 01-foundation]: get_connection() sets synchronous=NORMAL and row_factory=aiosqlite.Row per connection for WAL performance and dict-like row access
 
 ### Pending Todos
 
@@ -79,6 +82,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T10:04:31.553Z
-Stopped at: Completed 01-02-PLAN.md — auth middleware and forum topic routing
+Last session: 2026-03-24T10:07:49.053Z
+Stopped at: Completed 01-03-PLAN.md — SQLite persistence layer with WAL mode
 Resume file: None
