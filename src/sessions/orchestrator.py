@@ -170,6 +170,8 @@ def create_orchestrator_mcp_server(
             return {"content": [{"type": "text", "text": f"No session found for thread {thread_id}"}]}
 
         runner.auto_mode = enable
+        from src.db.queries import update_auto_mode
+        await update_auto_mode(thread_id, enable)
         status = "enabled" if enable else "disabled"
 
         try:

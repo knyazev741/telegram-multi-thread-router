@@ -65,6 +65,7 @@ async def init_db(db_path: Path | None = None) -> None:
         for migration in [
             "ALTER TABLE sessions ADD COLUMN model TEXT",
             "ALTER TABLE topics ADD COLUMN is_orchestrator INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0",
         ]:
             try:
                 await conn.execute(migration)

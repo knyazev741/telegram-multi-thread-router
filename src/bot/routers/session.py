@@ -325,8 +325,9 @@ async def handle_list_in_session(
             server = "local"
             status = ""
         server_info = f"on <i>{server}</i> {status}".strip()
+        auto = " 🤖auto" if getattr(runner, "auto_mode", False) else ""
         lines.append(
-            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}"
+            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}{auto}"
         )
 
     # Also show connected workers

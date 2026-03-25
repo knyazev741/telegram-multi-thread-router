@@ -57,7 +57,7 @@ async def get_resumable_sessions() -> list[dict]:
     """Return all local sessions that were running or idle and have a session_id."""
     async with get_connection() as conn:
         cursor = await conn.execute(
-            "SELECT thread_id, session_id, workdir, model, state, server FROM sessions "
+            "SELECT thread_id, session_id, workdir, model, state, server, auto_mode FROM sessions "
             "WHERE state IN ('running', 'idle') AND session_id IS NOT NULL"
         )
         rows = await cursor.fetchall()
@@ -68,7 +68,7 @@ async def get_worker_sessions(worker_id: str) -> list[dict]:
     """Return all idle/running sessions for a specific remote worker (session_id not required)."""
     async with get_connection() as conn:
         cursor = await conn.execute(
-            "SELECT thread_id, session_id, workdir, model, state, server FROM sessions "
+            "SELECT thread_id, session_id, workdir, model, state, server, auto_mode FROM sessions "
             "WHERE state IN ('running', 'idle') AND server=?",
             (worker_id,),
         )
@@ -85,6 +85,16 @@ async def get_session_by_thread(thread_id: int) -> dict | None:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+async def update_auto_mode(thread_id: int, enabled: bool) -> None:
+    """Update auto_mode flag for a session."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "UPDATE sessions SET auto_mode=?, updated_at=datetime('now') WHERE thread_id=?",
+            (int(enabled), thread_id),
+        )
+        await conn.commit()
 
 
 async def delete_session_and_topic(thread_id: int) -> None:

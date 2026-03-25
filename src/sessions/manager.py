@@ -138,7 +138,7 @@ class SessionManager:
                 continue
 
             try:
-                await self.create(
+                runner = await self.create(
                     thread_id=thread_id,
                     workdir=workdir,
                     bot=bot,
@@ -147,6 +147,9 @@ class SessionManager:
                     session_id=session_id,
                     model=model,
                 )
+                # Restore auto_mode from DB
+                if row.get("auto_mode"):
+                    runner.auto_mode = True
                 await bot.send_message(
                     chat_id=chat_id,
                     message_thread_id=thread_id,

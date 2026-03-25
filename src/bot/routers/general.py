@@ -110,8 +110,9 @@ async def handle_list(message: Message, session_manager: SessionManager) -> None
             status = ""
 
         server_info = f"on <i>{server}</i> {status}".strip()
+        auto = " 🤖auto" if getattr(runner, "auto_mode", False) else ""
         lines.append(
-            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}"
+            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}{auto}"
         )
     await message.reply("\n".join(lines), parse_mode="HTML")
 

@@ -119,7 +119,7 @@ async def _resume_worker_sessions(
         if session_manager.get(thread_id):
             continue
         try:
-            await session_manager.create_remote(
+            remote = await session_manager.create_remote(
                 thread_id=thread_id,
                 workdir=row["workdir"],
                 worker_id=worker_id,
@@ -127,6 +127,8 @@ async def _resume_worker_sessions(
                 session_id=row.get("session_id"),
                 model=row.get("model"),
             )
+            if row.get("auto_mode"):
+                remote.auto_mode = True
             await bot.send_message(
                 chat_id=settings.group_chat_id,
                 message_thread_id=thread_id,

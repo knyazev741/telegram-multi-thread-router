@@ -473,7 +473,7 @@ class SessionRunner:
                 # Feed usage/model data to status updater
                 msg_usage = getattr(msg, "usage", None)
                 if msg_usage:
-                    logger.debug(
+                    logger.info(
                         "AssistantMessage usage thread=%d: %s", self.thread_id, msg_usage
                     )
                 if self._status:
@@ -588,12 +588,13 @@ class SessionRunner:
                     await update_session_id(self.thread_id, msg.session_id)
 
                 # Feed final usage to status before finalizing
-                if hasattr(msg, "usage") and msg.usage:
-                    logger.debug(
-                        "ResultMessage usage thread=%d: %s", self.thread_id, msg.usage
-                    )
-                if self._status and hasattr(msg, "usage") and msg.usage:
-                    self._status.track_usage(usage=msg.usage)
+                result_usage = getattr(msg, "usage", None)
+                logger.info(
+                    "ResultMessage thread=%d: usage=%s cost=%s",
+                    self.thread_id, result_usage, msg.total_cost_usd,
+                )
+                if self._status and result_usage:
+                    self._status.track_usage(usage=result_usage)
 
                 # STAT-06: Finalize status with cost/duration summary
                 if self._status:
