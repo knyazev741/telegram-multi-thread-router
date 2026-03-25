@@ -138,15 +138,18 @@ async def handle_question_callback(
     Command("stop"),
 )
 async def handle_stop(message: Message, session_manager: SessionManager) -> None:
-    """Stop the Claude session in this topic."""
+    """Interrupt the current turn (like Escape in CLI). Session stays alive."""
     thread_id = message.message_thread_id
     runner = session_manager.get(thread_id)
     if runner is None:
         await message.reply("No active session in this topic.")
         return
 
-    await session_manager.stop(thread_id)
-    await message.reply("Session stopped.")
+    interrupted = await runner.interrupt()
+    if interrupted:
+        await message.reply("Interrupted.")
+    else:
+        await message.reply("Nothing running to interrupt.")
 
 
 @session_router.message(

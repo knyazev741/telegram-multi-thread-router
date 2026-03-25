@@ -81,8 +81,8 @@ src/
 - `/restart` — restart bot, resume all sessions
 
 **Inside a session thread:**
-- `/stop` — stop the session
-- `/close` — stop + delete thread
+- `/stop` — interrupt current turn (like Escape in CLI), session stays alive
+- `/close` — kill session + delete thread
 - `/clear`, `/compact`, `/reset` — forwarded to Claude Code
 - Text → forwarded to Claude
 - Voice → transcribed → forwarded
@@ -97,9 +97,19 @@ src/
 ## Infrastructure
 
 ### Servers
-- **Personal server**: `167.235.155.73` (SSH: `ssh personal-server`) — all autonomous services, Gitea, backups
-- **Business server**: `116.203.112.192`
+- **Personal server**: `167.235.155.73` (SSH: `ssh personal-server`, key: `~/.ssh/automation_personal`, user: root) — main host: Gitea, Taskflow, agent services, Docker (postgres, redis, backend)
+- **Personal server 2**: `204.168.163.135` (SSH: `ssh personal-server-2`, key: `~/.ssh/id_rsa_knyaz`, user: root)
+- **Business server**: `116.203.112.192` (SSH: `ssh business-server`, key: `~/.ssh/root_key`, user: root) — AI-Manager, MySQL, Qdrant, Celery workers
 - **Club server**: `128.140.111.201` — club chat bots and automation
+- **KS Promo**: `135.181.43.186` (key: `~/.ssh/automation_personal`, user: root) — executor, cron jobs
+
+### Multi-server architecture
+The bot runs on **personal server** (`167.235.155.73`) and manages Claude sessions on any server via TCP IPC workers:
+- **Bot (hub)**: runs on personal server, handles Telegram, dispatches to workers
+- **Workers**: run on Mac/business/club/etc, connect to bot via `python -m src.ipc.client`
+- **IPC protocol**: TCP + msgspec, token auth, port 9600
+
+Worker launch: `python -m src.ipc.client --host 167.235.155.73 --port 9600 --token $AUTH_TOKEN --worker-id mac`
 
 ### Repos
 - **This repo (local/Mac)**: `/Users/knyaz/Telegram Multi-Thread Router/` — new architecture (aiogram 3 + Claude Agent SDK)

@@ -628,6 +628,21 @@ class SessionRunner:
         """
         await self._message_queue.put(_QueueItem(text=text, reply_to_message_id=reply_to_message_id))
 
+    async def interrupt(self) -> bool:
+        """Interrupt the current turn (like Escape in CLI). Session stays alive for next message.
+
+        Returns True if there was a running turn to interrupt, False otherwise.
+        """
+        if self.state != SessionState.RUNNING or not self._client:
+            return False
+        try:
+            await self._client.interrupt()
+            logger.info("Interrupted running turn in thread %d", self.thread_id)
+            return True
+        except Exception as e:
+            logger.warning("Failed to interrupt thread %d: %s", self.thread_id, e)
+            return False
+
     async def stop(self) -> None:
         """Interrupt the running turn (if any) and stop the runner."""
         prev_state = self.state
