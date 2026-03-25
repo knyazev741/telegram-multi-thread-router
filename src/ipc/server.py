@@ -163,6 +163,17 @@ async def _handle_worker(
         worker_registry.register(worker_id, writer)
         logger.info("Worker %s authenticated and registered", worker_id)
 
+        # Guard: chat_id must be set before processing worker messages
+        if settings.chat_id is None:
+            logger.error(
+                "Worker %s connected but chat_id is not set yet. "
+                "Send a message to the bot first. Closing connection.",
+                worker_id,
+            )
+            worker_registry.unregister(worker_id)
+            writer.close()
+            return
+
         # --- Resume remote sessions for this worker ---
         await _resume_worker_sessions(
             worker_id, bot, session_manager, worker_registry,
