@@ -94,24 +94,11 @@ src/
 - OWNER_USER_ID enforced via outer middleware on all messages
 - AUTH_TOKEN for TCP worker authentication
 
-## Infrastructure
+## Multi-server Architecture
 
-### Servers
-- **Personal server**: `167.235.155.73` (SSH: `ssh personal-server`, key: `~/.ssh/automation_personal`, user: root) — main host: Gitea, Taskflow, agent services, Docker (postgres, redis, backend)
-- **Personal server 2**: `204.168.163.135` (SSH: `ssh personal-server-2`, key: `~/.ssh/id_rsa_knyaz`, user: root)
-- **Business server**: `116.203.112.192` (SSH: `ssh business-server`, key: `~/.ssh/root_key`, user: root) — AI-Manager, MySQL, Qdrant, Celery workers
-- **Club server**: `128.140.111.201` — club chat bots and automation
-- **KS Promo**: `135.181.43.186` (key: `~/.ssh/automation_personal`, user: root) — executor, cron jobs
+The bot supports running Claude Code sessions on multiple machines via TCP IPC workers:
+- **Bot (hub)**: handles Telegram, dispatches to workers
+- **Workers**: run on remote machines, connect to bot via `python -m src.ipc.client`
+- **IPC protocol**: TCP + msgspec, token auth
 
-### Multi-server architecture
-The bot runs on **personal server** (`167.235.155.73`) and manages Claude sessions on any server via TCP IPC workers:
-- **Bot (hub)**: runs on personal server, handles Telegram, dispatches to workers
-- **Workers**: run on Mac/business/club/etc, connect to bot via `python -m src.ipc.client`
-- **IPC protocol**: TCP + msgspec, token auth, port 9600
-
-Worker launch: `python -m src.ipc.client --host 167.235.155.73 --port 9600 --token $AUTH_TOKEN --worker-id mac`
-
-### Repos
-- **This repo (local/Mac)**: `/Users/knyaz/Telegram Multi-Thread Router/` — new architecture (aiogram 3 + Claude Agent SDK)
-- **Agent repo**: `/Users/knyaz/agent/` (Mac) / `/root/agent/` (server) — main agent-orchestrator, services, memory
-- **Gitea (private Git)**: `https://git.knyazevai.work` — primary remote for all repos
+Worker launch: `python -m src.ipc.client --host <bot-ip> --port 9800 --token $AUTH_TOKEN --worker-id <name>`
