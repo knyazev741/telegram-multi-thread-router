@@ -49,12 +49,16 @@ class RemoteSession:
             ),
         )
 
-    async def enqueue(self, text: str) -> None:
+    async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
         """Forward a user message to the worker."""
         await self._registry.send_to(
             self.worker_id,
             UserMessageMsg(topic_id=self.thread_id, text=text),
         )
+
+    async def interrupt(self) -> bool:
+        """Interrupt not supported for remote sessions yet."""
+        return False
 
     async def stop(self) -> None:
         """Instruct the worker to stop this session and mark state locally."""
