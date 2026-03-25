@@ -54,11 +54,23 @@ async def update_session_state(thread_id: int, state: str) -> None:
 
 
 async def get_resumable_sessions() -> list[dict]:
-    """Return all sessions that were running or idle and have a session_id (resumable on startup)."""
+    """Return all local sessions that were running or idle and have a session_id."""
     async with get_connection() as conn:
         cursor = await conn.execute(
             "SELECT thread_id, session_id, workdir, model, state, server FROM sessions "
             "WHERE state IN ('running', 'idle') AND session_id IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def get_worker_sessions(worker_id: str) -> list[dict]:
+    """Return all idle/running sessions for a specific remote worker (session_id not required)."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT thread_id, session_id, workdir, model, state, server FROM sessions "
+            "WHERE state IN ('running', 'idle') AND server=?",
+            (worker_id,),
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]

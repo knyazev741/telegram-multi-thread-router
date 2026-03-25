@@ -106,12 +106,10 @@ async def _resume_worker_sessions(
     worker_registry: WorkerRegistry,
 ) -> None:
     """Resume remote sessions for a reconnected worker."""
-    from src.db.queries import get_resumable_sessions
+    from src.db.queries import get_worker_sessions
 
-    rows = await get_resumable_sessions()
+    rows = await get_worker_sessions(worker_id)
     for row in rows:
-        if row.get("server") != worker_id:
-            continue
         thread_id = row["thread_id"]
         # Skip if already registered in session manager
         if session_manager.get(thread_id):
