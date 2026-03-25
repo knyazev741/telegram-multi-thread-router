@@ -99,6 +99,42 @@ async def start_ipc_server(
     return server
 
 
+async def _resume_worker_sessions(
+    worker_id: str,
+    bot: Bot,
+    session_manager,
+    worker_registry: WorkerRegistry,
+) -> None:
+    """Resume remote sessions for a reconnected worker."""
+    from src.db.queries import get_resumable_sessions
+
+    rows = await get_resumable_sessions()
+    for row in rows:
+        if row.get("server") != worker_id:
+            continue
+        thread_id = row["thread_id"]
+        # Skip if already registered in session manager
+        if session_manager.get(thread_id):
+            continue
+        try:
+            await session_manager.create_remote(
+                thread_id=thread_id,
+                workdir=row["workdir"],
+                worker_id=worker_id,
+                worker_registry=worker_registry,
+                session_id=row.get("session_id"),
+                model=row.get("model"),
+            )
+            await bot.send_message(
+                chat_id=settings.group_chat_id,
+                message_thread_id=thread_id,
+                text=f"Session resumed on {worker_id}.",
+            )
+            logger.info("Resumed remote session topic %d on worker %s", thread_id, worker_id)
+        except Exception as e:
+            logger.error("Failed to resume remote session %d on %s: %s", thread_id, worker_id, e)
+
+
 async def _handle_worker(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -122,6 +158,11 @@ async def _handle_worker(
         await send_msg(writer, AuthOkMsg(worker_id=worker_id))
         worker_registry.register(worker_id, writer)
         logger.info("Worker %s authenticated and registered", worker_id)
+
+        # --- Resume remote sessions for this worker ---
+        await _resume_worker_sessions(
+            worker_id, bot, session_manager, worker_registry,
+        )
 
         # --- Message dispatch loop ---
         while True:
