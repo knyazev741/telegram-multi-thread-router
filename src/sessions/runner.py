@@ -151,6 +151,7 @@ class SessionRunner:
         self._last_seen_model: str | None = None  # Track model changes across turns
         self._current_reply_to: int | None = None  # message_id to reply to for current turn
         self._effort: str | None = None  # Track effort level (updated from SDK system messages)
+        self.auto_mode: bool = False  # Auto-approve all permissions (no prompts)
 
         # Initialize allowed tools from global permissions
         self._allowed_tools.update(self._permission_manager.get_global_allowed())
@@ -299,6 +300,10 @@ class SessionRunner:
         Checks global allowed tools first, then session-local.
         "Allow always" saves to global persistent set via PermissionManager.
         """
+        # Auto mode — approve everything without prompting
+        if self.auto_mode and tool_name != "AskUserQuestion":
+            return PermissionResultAllow(updated_input=input_data)
+
         # AskUserQuestion — proxy questions to Telegram inline buttons
         if tool_name == "AskUserQuestion" and self._question_manager is not None:
             return await self._handle_ask_user_question(input_data)

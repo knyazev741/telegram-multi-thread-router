@@ -226,6 +226,15 @@ async def _handle_worker(
                             )
 
             elif isinstance(msg, PermissionRequestMsg):
+                # Auto-mode: approve immediately without prompting
+                remote_session = session_manager.get(msg.topic_id)
+                if remote_session and getattr(remote_session, 'auto_mode', False):
+                    response = PermissionResponseMsg(
+                        request_id=msg.request_id, action="allow"
+                    )
+                    await worker_registry.send_to(worker_id, response)
+                    continue
+
                 _request_id, future = permission_manager.create_request()
                 perm_text = format_permission_message(msg.tool_name, msg.input_data)
                 keyboard = build_permission_keyboard(_request_id)

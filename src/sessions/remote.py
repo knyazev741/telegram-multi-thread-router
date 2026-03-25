@@ -31,6 +31,7 @@ class RemoteSession:
         self.worker_id = worker_id
         self.session_id = session_id
         self.state: SessionState = SessionState.IDLE
+        self.auto_mode: bool = False
         self._registry = worker_registry
 
     @property

@@ -156,9 +156,36 @@ def create_orchestrator_mcp_server(
             logger.error("stop_session error: %s", e)
             return {"content": [{"type": "text", "text": f"Error: {e}"}]}
 
+    @tool(
+        "auto_mode",
+        "Toggle auto-mode for a session — auto-approves all permissions without prompting the user. "
+        "Pass enable=true to enable, enable=false to disable.",
+        {"thread_id": int, "enable": bool},
+    )
+    async def auto_mode(args: dict) -> dict:
+        thread_id = args["thread_id"]
+        enable = args["enable"]
+        runner = session_manager.get(thread_id)
+        if not runner:
+            return {"content": [{"type": "text", "text": f"No session found for thread {thread_id}"}]}
+
+        runner.auto_mode = enable
+        status = "enabled" if enable else "disabled"
+
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                message_thread_id=thread_id,
+                text=f"🤖 Auto-mode {status}",
+            )
+        except Exception:
+            pass
+
+        return {"content": [{"type": "text", "text": f"Auto-mode {status} for thread {thread_id}"}]}
+
     return create_sdk_mcp_server(
         "orchestrator",
-        tools=[create_session, list_sessions, stop_session],
+        tools=[create_session, list_sessions, stop_session, auto_mode],
     )
 
 
