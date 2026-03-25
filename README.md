@@ -57,7 +57,13 @@ Telegram Bot (threads)
 
 - Python 3.11+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- A Telegram bot token (from [@BotFather](https://t.me/BotFather)) with **Threaded Mode** enabled (BotFather → your bot → Bot Settings → Threaded Mode)
+- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
+
+### Bot Setup in BotFather
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token
+2. Go to **Bot Settings → Threaded Mode → Enable**
+3. **Send `/start` to your bot** before launching the script — the bot needs an active chat with you to create threads
 
 ### Installation
 
@@ -80,7 +86,7 @@ Edit `.env`:
 | Variable | Description |
 |----------|-------------|
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
-| `OWNER_USER_ID` | Your Telegram user ID (only you can use the bot) |
+| `OWNER_USER_ID` | Your Telegram user ID — get it from [@Get_myidrobot](https://t.me/Get_myidrobot) |
 | `AUTH_TOKEN` | Shared secret for TCP worker authentication |
 
 ### Run
