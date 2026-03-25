@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     bot_token: str
     owner_user_id: int
-    group_chat_id: int | None = None  # Auto-detected from first owner message if not set
+    chat_id: int | None = None  # Auto-detected from first owner message if not set
     auth_token: str
     ipc_host: str = "0.0.0.0"
     ipc_port: int = 9800

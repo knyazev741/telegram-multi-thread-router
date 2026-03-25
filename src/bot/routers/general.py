@@ -1,8 +1,7 @@
 """General topic router — minimal fallback for thread_id=1/None.
 
-In Telegram groups with topics enabled, messages to the General topic
-auto-create new topics, so these handlers rarely fire in practice.
-The main interface is the Orchestrator thread + session threads.
+Messages to the General topic auto-create new topics, so these handlers
+rarely fire in practice. The main interface is the Orchestrator thread.
 """
 
 import logging

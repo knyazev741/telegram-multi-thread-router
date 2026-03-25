@@ -18,8 +18,8 @@ def create_telegram_mcp_server(bot: Bot, chat_id: int, thread_id: int):
 
     Args:
         bot: The aiogram Bot instance to use for sending messages.
-        chat_id: The Telegram chat (group) ID.
-        thread_id: The Telegram forum topic (message_thread_id) to send to.
+        chat_id: The Telegram chat ID.
+        thread_id: The Telegram thread (message_thread_id) to send to.
 
     Returns:
         McpSdkServerConfig: An in-process MCP server with reply, send_file,

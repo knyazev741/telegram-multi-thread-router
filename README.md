@@ -89,7 +89,7 @@ Edit `.env`:
 python -m src
 ```
 
-Add the bot to a Telegram group with topics enabled and send any message. The bot auto-detects the chat and creates an **🎯 Orchestrator** thread — this is the main interface for managing sessions.
+Send any message to the bot. It auto-detects the chat and creates an **🎯 Orchestrator** thread — this is the main interface for managing sessions.
 
 ## Usage
 

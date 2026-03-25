@@ -161,7 +161,7 @@ async def test_handle_session_message_forwards_slash_commands():
 @patch.dict("os.environ", {
     "BOT_TOKEN": "test",
     "OWNER_USER_ID": "12345",
-    "GROUP_CHAT_ID": "-100999",
+    "CHAT_ID": "-100999",
     "AUTH_TOKEN": "test",
 })
 def test_build_dispatcher_has_middleware():

@@ -9,21 +9,21 @@ from unittest.mock import AsyncMock, MagicMock
 # These values are set before any module-level Settings() instantiation.
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
 os.environ.setdefault("OWNER_USER_ID", "12345")
-os.environ.setdefault("GROUP_CHAT_ID", "-100999")
+os.environ.setdefault("CHAT_ID", "-100999")
 os.environ.setdefault("AUTH_TOKEN", "test-auth-token")
 
 OWNER_ID = 12345
-GROUP_CHAT_ID = -100999
+CHAT_ID = -100999
 
 
 @pytest.fixture
 def owner_message():
-    """Mock Message from the owner in the correct group."""
+    """Mock Message from the owner in the correct chat."""
     msg = MagicMock()
     msg.from_user = MagicMock()
     msg.from_user.id = OWNER_ID
     msg.chat = MagicMock()
-    msg.chat.id = GROUP_CHAT_ID
+    msg.chat.id = CHAT_ID
     msg.message_thread_id = 1
     return msg
 
@@ -35,7 +35,7 @@ def stranger_message():
     msg.from_user = MagicMock()
     msg.from_user.id = 99999
     msg.chat = MagicMock()
-    msg.chat.id = GROUP_CHAT_ID
+    msg.chat.id = CHAT_ID
     msg.message_thread_id = 1
     return msg
 
@@ -58,7 +58,7 @@ def channel_post_message():
     msg = MagicMock()
     msg.from_user = None
     msg.chat = MagicMock()
-    msg.chat.id = GROUP_CHAT_ID
+    msg.chat.id = CHAT_ID
     msg.message_thread_id = 1
     return msg
 
@@ -89,7 +89,7 @@ def session_runner(mock_bot, permission_manager):
         thread_id=42,
         workdir="/tmp/test",
         bot=mock_bot,
-        chat_id=GROUP_CHAT_ID,
+        chat_id=CHAT_ID,
         permission_manager=permission_manager,
     )
     return runner

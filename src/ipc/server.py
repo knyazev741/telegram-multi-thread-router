@@ -130,7 +130,7 @@ async def _resume_worker_sessions(
             if row.get("auto_mode"):
                 remote.auto_mode = True
             await bot.send_message(
-                chat_id=settings.group_chat_id,
+                chat_id=settings.chat_id,
                 message_thread_id=thread_id,
                 text=f"Session resumed on {worker_id}.",
             )
@@ -177,7 +177,7 @@ async def _handle_worker(
 
         async def _get_or_create_status(topic_id: int) -> StatusUpdater:
             if topic_id not in _status_updaters:
-                s = StatusUpdater(bot, settings.group_chat_id, topic_id)
+                s = StatusUpdater(bot, settings.chat_id, topic_id)
                 await s.start_turn()
                 _status_updaters[topic_id] = s
             return _status_updaters[topic_id]
@@ -201,7 +201,7 @@ async def _handle_worker(
                 for part in parts:
                     try:
                         await bot.send_message(
-                            chat_id=settings.group_chat_id,
+                            chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
                             text=part,
                             parse_mode="Markdown",
@@ -209,7 +209,7 @@ async def _handle_worker(
                     except TelegramRetryAfter as e:
                         await asyncio.sleep(e.retry_after)
                         await bot.send_message(
-                            chat_id=settings.group_chat_id,
+                            chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
                             text=part,
                             parse_mode="Markdown",
@@ -217,7 +217,7 @@ async def _handle_worker(
                     except Exception:
                         try:
                             await bot.send_message(
-                                chat_id=settings.group_chat_id,
+                                chat_id=settings.chat_id,
                                 message_thread_id=msg.topic_id,
                                 text=part,
                             )
@@ -242,7 +242,7 @@ async def _handle_worker(
                 keyboard = build_permission_keyboard(_request_id)
                 try:
                     await bot.send_message(
-                        chat_id=settings.group_chat_id,
+                        chat_id=settings.chat_id,
                         message_thread_id=msg.topic_id,
                         text=perm_text,
                         parse_mode="HTML",
@@ -319,7 +319,7 @@ async def _handle_worker(
                 if msg.is_error:
                     try:
                         await bot.send_message(
-                            chat_id=settings.group_chat_id,
+                            chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
                             text=f"❌ Error in remote session",
                         )
@@ -340,7 +340,7 @@ async def _handle_worker(
                 if text:
                     try:
                         await bot.send_message(
-                            chat_id=settings.group_chat_id,
+                            chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
                             text=text,
                         )
@@ -350,7 +350,7 @@ async def _handle_worker(
             elif isinstance(msg, SystemNotificationMsg):
                 try:
                     await bot.send_message(
-                        chat_id=settings.group_chat_id,
+                        chat_id=settings.chat_id,
                         message_thread_id=msg.topic_id,
                         text=msg.text,
                         parse_mode="HTML",
@@ -358,7 +358,7 @@ async def _handle_worker(
                 except Exception:
                     try:
                         await bot.send_message(
-                            chat_id=settings.group_chat_id,
+                            chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
                             text=msg.text,
                         )
@@ -381,7 +381,7 @@ async def _handle_worker(
                 if msg.error:
                     try:
                         await bot.send_message(
-                            chat_id=settings.group_chat_id,
+                            chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
                             text=f"Session ended with error: {msg.error}",
                         )
@@ -399,7 +399,7 @@ async def _handle_worker(
             elif isinstance(msg, McpSendMessageMsg):
                 try:
                     await bot.send_message(
-                        chat_id=settings.group_chat_id,
+                        chat_id=settings.chat_id,
                         message_thread_id=msg.topic_id,
                         text=msg.text,
                     )
@@ -411,7 +411,7 @@ async def _handle_worker(
             elif isinstance(msg, McpReactMsg):
                 try:
                     await bot.set_message_reaction(
-                        chat_id=settings.group_chat_id,
+                        chat_id=settings.chat_id,
                         message_id=msg.message_id,
                         reaction=[ReactionTypeEmoji(emoji=msg.emoji)],
                     )
@@ -423,7 +423,7 @@ async def _handle_worker(
             elif isinstance(msg, McpEditMessageMsg):
                 try:
                     await bot.edit_message_text(
-                        chat_id=settings.group_chat_id,
+                        chat_id=settings.chat_id,
                         message_id=msg.message_id,
                         text=msg.text,
                     )
@@ -435,7 +435,7 @@ async def _handle_worker(
             elif isinstance(msg, McpSendFileMsg):
                 try:
                     await bot.send_document(
-                        chat_id=settings.group_chat_id,
+                        chat_id=settings.chat_id,
                         message_thread_id=msg.topic_id,
                         document=FSInputFile(msg.file_path),
                         caption=msg.caption,

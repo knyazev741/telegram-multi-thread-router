@@ -170,7 +170,7 @@ async def handle_new(
 
     # Create forum topic
     topic = await bot(CreateForumTopic(
-        chat_id=settings.group_chat_id,
+        chat_id=settings.chat_id,
         name=name,
     ))
     thread_id = topic.message_thread_id
@@ -194,13 +194,13 @@ async def handle_new(
             thread_id=thread_id,
             workdir=workdir,
             bot=bot,
-            chat_id=settings.group_chat_id,
+            chat_id=settings.chat_id,
             permission_manager=permission_manager,
             model=model,
         )
 
     await bot.send_message(
-        chat_id=settings.group_chat_id,
+        chat_id=settings.chat_id,
         message_thread_id=thread_id,
         text=(
             f"Session <b>{name}</b> started\n"
@@ -287,14 +287,14 @@ async def handle_close(message: Message, bot: Bot, session_manager: SessionManag
     # Delete forum topic (fall back to closing if deletion fails)
     try:
         await bot.delete_forum_topic(
-            chat_id=settings.group_chat_id,
+            chat_id=settings.chat_id,
             message_thread_id=thread_id,
         )
     except Exception:
         logger.warning("Could not delete topic %d, trying to close instead", thread_id)
         try:
             await bot.close_forum_topic(
-                chat_id=settings.group_chat_id,
+                chat_id=settings.chat_id,
                 message_thread_id=thread_id,
             )
         except Exception as e:

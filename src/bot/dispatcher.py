@@ -44,12 +44,12 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     await init_db()
 
     # Auto-detect chat_id: load from DB if not in env
-    if settings.group_chat_id is None:
+    if settings.chat_id is None:
         from src.db.queries import get_bot_setting
         saved_chat_id = await get_bot_setting("chat_id")
         if saved_chat_id:
-            settings.group_chat_id = int(saved_chat_id)
-            logger.info("Loaded chat_id from DB: %d", settings.group_chat_id)
+            settings.chat_id = int(saved_chat_id)
+            logger.info("Loaded chat_id from DB: %d", settings.chat_id)
 
     permission_manager = PermissionManager()
     await permission_manager.load_from_db()
@@ -78,29 +78,29 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
         dispatcher["ipc_server"] = None
 
     # Only proceed with session resume and orchestrator if chat_id is known
-    if settings.group_chat_id:
+    if settings.chat_id:
         # Resume sessions that were active before bot stopped
-        resumed = await manager.resume_all(bot, settings.group_chat_id, permission_manager)
+        resumed = await manager.resume_all(bot, settings.chat_id, permission_manager)
         if resumed:
             logger.info("Resumed %d session(s) from database", resumed)
 
         # Start health monitoring background task
         from src.sessions.health import health_check_loop
         health_task = asyncio.create_task(
-            health_check_loop(manager, bot, settings.group_chat_id)
+            health_check_loop(manager, bot, settings.chat_id)
         )
         dispatcher["health_task"] = health_task
 
         # Start orchestrator session
         from src.sessions.orchestrator import ensure_orchestrator
         orch_thread = await ensure_orchestrator(
-            bot, settings.group_chat_id, manager, permission_manager, worker_registry,
+            bot, settings.chat_id, manager, permission_manager, worker_registry,
         )
         if orch_thread:
             dispatcher["orchestrator_thread_id"] = orch_thread
             logger.info("Orchestrator running in thread %d", orch_thread)
     else:
-        logger.info("No chat_id configured — waiting for first message from owner in a group")
+        logger.info("No chat_id configured — waiting for first message from owner")
 
     logger.info("Bot startup complete — SessionManager initialized")
 

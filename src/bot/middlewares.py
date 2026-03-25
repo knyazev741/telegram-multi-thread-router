@@ -11,13 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 class OwnerAuthMiddleware(BaseMiddleware):
-    """Drop all messages not from the owner. Auto-detect group chat on first message.
+    """Drop all messages not from the owner. Auto-detect chat_id on first message.
 
     Registered as outer middleware on dp.message so it fires before
     any router filters. Silent drop — no reply to non-owner users.
 
-    If group_chat_id is not set (None), the first message from the owner
-    in a supergroup will set it and persist to DB.
+    If chat_id is not set (None), the first message from the owner
+    will set it and persist to DB.
     """
 
     def __init__(self, owner_id: int) -> None:
@@ -41,28 +41,25 @@ class OwnerAuthMiddleware(BaseMiddleware):
 
         from src.config import settings
 
-        # Auto-detect chat_id from first owner message in a group/supergroup
-        if settings.group_chat_id is None:
-            if event.chat.type in ("supergroup", "group"):
-                async with self._setup_lock:
-                    if settings.group_chat_id is None:  # double-check
-                        settings.group_chat_id = event.chat.id
-                        logger.info("Auto-detected chat_id: %d", event.chat.id)
-                        # Persist to DB
-                        try:
-                            from src.db.queries import set_bot_setting
-                            await set_bot_setting("chat_id", str(event.chat.id))
-                        except Exception as e:
-                            logger.error("Failed to persist chat_id: %s", e)
-                        # Signal setup complete
-                        self._setup_done.set()
-                        # Trigger deferred orchestrator setup
-                        await self._deferred_setup(event, data)
-            else:
-                return None  # Ignore non-group messages until chat is detected
+        # Auto-detect chat_id from first owner message
+        if settings.chat_id is None:
+            async with self._setup_lock:
+                if settings.chat_id is None:  # double-check
+                    settings.chat_id = event.chat.id
+                    logger.info("Auto-detected chat_id: %d", event.chat.id)
+                    # Persist to DB
+                    try:
+                        from src.db.queries import set_bot_setting
+                        await set_bot_setting("chat_id", str(event.chat.id))
+                    except Exception as e:
+                        logger.error("Failed to persist chat_id: %s", e)
+                    # Signal setup complete
+                    self._setup_done.set()
+                    # Trigger deferred orchestrator setup
+                    await self._deferred_setup(event, data)
 
-        # Guard: only process messages from the configured group
-        if event.chat.id != settings.group_chat_id:
+        # Guard: only process messages from the detected chat
+        if event.chat.id != settings.chat_id:
             return None
 
         return await handler(event, data)
@@ -86,7 +83,7 @@ class OwnerAuthMiddleware(BaseMiddleware):
             return
 
         orch_thread = await ensure_orchestrator(
-            bot, settings.group_chat_id, session_manager, permission_manager, worker_registry,
+            bot, settings.chat_id, session_manager, permission_manager, worker_registry,
         )
         if orch_thread:
             dispatcher["orchestrator_thread_id"] = orch_thread
