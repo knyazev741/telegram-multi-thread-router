@@ -336,6 +336,8 @@ async def handle_voice(message: Message, session_manager: SessionManager) -> Non
         # 👀 = enqueued to Claude session
         await _react(message, "👀")
         await runner.enqueue(text, reply_to_message_id=message.message_id)
+    except ConnectionError as e:
+        await message.reply(str(e))
     except Exception as e:
         logger.error("Voice transcription error in thread %d: %s", thread_id, e)
         await message.reply(f"Voice transcription failed: {e}")
@@ -373,6 +375,8 @@ async def handle_photo(message: Message, session_manager: SessionManager) -> Non
         # 👀 = enqueued to Claude session
         await _react(message, "👀")
         await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
+    except ConnectionError as e:
+        await message.reply(str(e))
     except Exception as e:
         logger.error("Photo download error in thread %d: %s", thread_id, e)
         await message.reply(f"Failed to download photo: {e}")
@@ -404,6 +408,8 @@ async def handle_document(message: Message, session_manager: SessionManager) -> 
         # 👀 = enqueued to Claude session
         await _react(message, "👀")
         await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
+    except ConnectionError as e:
+        await message.reply(str(e))
     except Exception as e:
         logger.error("Document download error in thread %d: %s", thread_id, e)
         await message.reply(f"Failed to download file: {e}")
@@ -479,4 +485,7 @@ async def handle_session_message(message: Message, session_manager: SessionManag
     await _react(message, "👀")
 
     # Enqueue to session with reply tracking
-    await runner.enqueue(text, reply_to_message_id=message.message_id)
+    try:
+        await runner.enqueue(text, reply_to_message_id=message.message_id)
+    except ConnectionError as e:
+        await message.reply(str(e))

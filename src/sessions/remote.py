@@ -41,7 +41,7 @@ class RemoteSession:
 
     async def start(self) -> None:
         """Send StartSessionMsg to the worker to begin the Claude session."""
-        await self._registry.send_to(
+        sent = await self._registry.send_to(
             self.worker_id,
             StartSessionMsg(
                 topic_id=self.thread_id,
@@ -49,13 +49,25 @@ class RemoteSession:
                 session_id=self.session_id,
             ),
         )
+        if not sent:
+            raise ConnectionError(
+                f"Worker '{self.worker_id}' is not connected. Cannot start session."
+            )
 
     async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
-        """Forward a user message to the worker."""
-        await self._registry.send_to(
+        """Forward a user message to the worker.
+
+        Raises ConnectionError if the worker is not connected, so the caller
+        can notify the user instead of silently dropping the message.
+        """
+        sent = await self._registry.send_to(
             self.worker_id,
             UserMessageMsg(topic_id=self.thread_id, text=text),
         )
+        if not sent:
+            raise ConnectionError(
+                f"Worker '{self.worker_id}' is not connected. Message not delivered."
+            )
 
     async def interrupt(self) -> bool:
         """Interrupt not supported for remote sessions yet."""
