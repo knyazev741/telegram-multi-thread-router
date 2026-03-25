@@ -26,6 +26,7 @@ class AssistantTextMsg(msgspec.Struct, tag="assistant_text"):
     """Chunk of assistant output text to be sent to the Telegram topic."""
     topic_id: int
     text: str
+    is_first: bool = False  # True for first text block in turn (for reply-to)
 
 
 class PermissionRequestMsg(msgspec.Struct, tag="permission_request"):
@@ -37,11 +38,51 @@ class PermissionRequestMsg(msgspec.Struct, tag="permission_request"):
 
 
 class StatusUpdateMsg(msgspec.Struct, tag="status_update"):
-    """Tool execution status update (elapsed time, call count)."""
+    """Tool execution status update with rich data."""
     topic_id: int
     tool_name: str
-    elapsed_ms: int
     tool_calls: int
+    input_data: dict | None = None
+    elapsed_ms: int = 0
+
+
+class TurnCompletedMsg(msgspec.Struct, tag="turn_completed"):
+    """Worker reports that a turn has finished (ResultMessage received)."""
+    topic_id: int
+    cost_usd: float | None = None
+    duration_ms: int = 0
+    tool_count: int = 0
+    is_error: bool = False
+    session_id: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    model: str | None = None
+
+
+class UsageUpdateMsg(msgspec.Struct, tag="usage_update"):
+    """Token/model data from AssistantMessage during a turn."""
+    topic_id: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    model: str | None = None
+
+
+class RateLimitMsg(msgspec.Struct, tag="rate_limit"):
+    """Forward rate limit events from worker."""
+    topic_id: int
+    status: str  # "rejected" | "allowed_warning"
+    resets_at: int | None = None
+    utilization: float | None = None
+
+
+class SystemNotificationMsg(msgspec.Struct, tag="system_notification"):
+    """Forward SystemMessage from worker (compact, model_change, etc.)."""
+    topic_id: int
+    subtype: str
+    text: str  # Pre-formatted notification text
 
 
 class SessionEndedMsg(msgspec.Struct, tag="session_ended"):
@@ -102,10 +143,16 @@ class StopSessionMsg(msgspec.Struct, tag="stop_session"):
     topic_id: int
 
 
+class InterruptMsg(msgspec.Struct, tag="interrupt"):
+    """Bot instructs worker to interrupt current turn (like Escape)."""
+    topic_id: int
+
+
 class UserMessageMsg(msgspec.Struct, tag="user_message"):
     """User text message forwarded from bot to worker."""
     topic_id: int
     text: str
+    reply_to_message_id: int | None = None
 
 
 class PermissionResponseMsg(msgspec.Struct, tag="permission_response"):
@@ -128,6 +175,10 @@ WorkerToBot = Union[
     AssistantTextMsg,
     PermissionRequestMsg,
     StatusUpdateMsg,
+    TurnCompletedMsg,
+    UsageUpdateMsg,
+    RateLimitMsg,
+    SystemNotificationMsg,
     SessionEndedMsg,
     McpSendMessageMsg,
     McpReactMsg,
@@ -140,6 +191,7 @@ BotToWorker = Union[
     AuthFailMsg,
     StartSessionMsg,
     StopSessionMsg,
+    InterruptMsg,
     UserMessageMsg,
     PermissionResponseMsg,
     SlashCommandMsg,

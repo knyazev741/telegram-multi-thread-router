@@ -20,9 +20,13 @@ from src.ipc.protocol import (
     McpSendMessageMsg,
     PermissionRequestMsg,
     PermissionResponseMsg,
+    RateLimitMsg,
     SessionEndedMsg,
     SessionStartedMsg,
     StatusUpdateMsg,
+    SystemNotificationMsg,
+    TurnCompletedMsg,
+    UsageUpdateMsg,
     recv_w2b,
     send_msg,
 )
@@ -164,6 +168,9 @@ async def _handle_worker(
 
         # --- Status trackers for remote sessions ---
         from src.bot.status import StatusUpdater
+        from src.db.queries import update_session_id
+        from aiogram.exceptions import TelegramRetryAfter
+
         _status_updaters: dict[int, StatusUpdater] = {}
 
         async def _get_or_create_status(topic_id: int) -> StatusUpdater:
@@ -173,10 +180,13 @@ async def _handle_worker(
                 _status_updaters[topic_id] = s
             return _status_updaters[topic_id]
 
-        async def _finalize_status(topic_id: int) -> None:
+        async def _finalize_status(topic_id: int, cost_usd=None, duration_ms=0, tool_count=0) -> None:
             s = _status_updaters.pop(topic_id, None)
             if s:
-                await s.stop()
+                if cost_usd is not None:
+                    await s.finalize(cost_usd=cost_usd, duration_ms=duration_ms, tool_count=tool_count)
+                else:
+                    await s.stop()
 
         # --- Message dispatch loop ---
         while True:
@@ -185,11 +195,17 @@ async def _handle_worker(
                 break  # EOF / clean disconnect
 
             if isinstance(msg, AssistantTextMsg):
-                # Finalize status when first text arrives (turn producing output)
-                await _finalize_status(msg.topic_id)
                 parts = split_message(msg.text)
                 for part in parts:
                     try:
+                        await bot.send_message(
+                            chat_id=settings.group_chat_id,
+                            message_thread_id=msg.topic_id,
+                            text=part,
+                            parse_mode="Markdown",
+                        )
+                    except TelegramRetryAfter as e:
+                        await asyncio.sleep(e.retry_after)
                         await bot.send_message(
                             chat_id=settings.group_chat_id,
                             message_thread_id=msg.topic_id,
@@ -206,8 +222,7 @@ async def _handle_worker(
                         except Exception as e:
                             logger.error(
                                 "Failed to send assistant text to topic %d: %s",
-                                msg.topic_id,
-                                e,
+                                msg.topic_id, e,
                             )
 
             elif isinstance(msg, PermissionRequestMsg):
@@ -225,8 +240,7 @@ async def _handle_worker(
                 except Exception as e:
                     logger.error(
                         "Failed to send permission request to topic %d: %s",
-                        msg.topic_id,
-                        e,
+                        msg.topic_id, e,
                     )
 
                 async def _await_permission(
@@ -251,14 +265,104 @@ async def _handle_worker(
 
             elif isinstance(msg, StatusUpdateMsg):
                 status = await _get_or_create_status(msg.topic_id)
-                status.track_tool(msg.tool_name)
+                status.track_tool(msg.tool_name, msg.input_data)
+
+            elif isinstance(msg, UsageUpdateMsg):
+                status = await _get_or_create_status(msg.topic_id)
+                status.track_usage(
+                    usage={
+                        "input_tokens": msg.input_tokens,
+                        "output_tokens": msg.output_tokens,
+                        "cache_read_input_tokens": msg.cache_read_tokens,
+                        "cache_creation_input_tokens": msg.cache_creation_tokens,
+                    },
+                    model=msg.model,
+                )
+
+            elif isinstance(msg, TurnCompletedMsg):
+                # Finalize status with full data
+                status = _status_updaters.get(msg.topic_id)
+                if status:
+                    # Feed final usage
+                    status.track_usage(
+                        usage={
+                            "input_tokens": msg.input_tokens,
+                            "output_tokens": msg.output_tokens,
+                            "cache_read_input_tokens": msg.cache_read_tokens,
+                        },
+                        model=msg.model,
+                    )
+                await _finalize_status(
+                    msg.topic_id,
+                    cost_usd=msg.cost_usd,
+                    duration_ms=msg.duration_ms,
+                    tool_count=msg.tool_count,
+                )
+                # Persist session_id
+                if msg.session_id:
+                    try:
+                        await update_session_id(msg.topic_id, msg.session_id)
+                    except Exception:
+                        pass
+                # Send error if turn failed
+                if msg.is_error:
+                    try:
+                        await bot.send_message(
+                            chat_id=settings.group_chat_id,
+                            message_thread_id=msg.topic_id,
+                            text=f"❌ Error in remote session",
+                        )
+                    except Exception:
+                        pass
+
+            elif isinstance(msg, RateLimitMsg):
+                text = None
+                if msg.status == "rejected":
+                    resets = ""
+                    if msg.resets_at:
+                        import datetime
+                        dt = datetime.datetime.fromtimestamp(msg.resets_at / 1000)
+                        resets = f" Resets at {dt.strftime('%H:%M')}"
+                    text = f"🚫 Rate limited!{resets}"
+                elif msg.status == "allowed_warning" and msg.utilization:
+                    text = f"⚠️ Rate limit: {msg.utilization * 100:.0f}% used"
+                if text:
+                    try:
+                        await bot.send_message(
+                            chat_id=settings.group_chat_id,
+                            message_thread_id=msg.topic_id,
+                            text=text,
+                        )
+                    except Exception:
+                        pass
+
+            elif isinstance(msg, SystemNotificationMsg):
+                try:
+                    await bot.send_message(
+                        chat_id=settings.group_chat_id,
+                        message_thread_id=msg.topic_id,
+                        text=msg.text,
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    try:
+                        await bot.send_message(
+                            chat_id=settings.group_chat_id,
+                            message_thread_id=msg.topic_id,
+                            text=msg.text,
+                        )
+                    except Exception:
+                        pass
 
             elif isinstance(msg, SessionStartedMsg):
+                if msg.session_id:
+                    try:
+                        await update_session_id(msg.topic_id, msg.session_id)
+                    except Exception:
+                        pass
                 logger.info(
                     "Worker %s started session %s on topic %d",
-                    worker_id,
-                    msg.session_id,
-                    msg.topic_id,
+                    worker_id, msg.session_id, msg.topic_id,
                 )
 
             elif isinstance(msg, SessionEndedMsg):
