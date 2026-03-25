@@ -162,6 +162,22 @@ async def _handle_worker(
             worker_id, bot, session_manager, worker_registry,
         )
 
+        # --- Status trackers for remote sessions ---
+        from src.bot.status import StatusUpdater
+        _status_updaters: dict[int, StatusUpdater] = {}
+
+        async def _get_or_create_status(topic_id: int) -> StatusUpdater:
+            if topic_id not in _status_updaters:
+                s = StatusUpdater(bot, settings.group_chat_id, topic_id)
+                await s.start_turn()
+                _status_updaters[topic_id] = s
+            return _status_updaters[topic_id]
+
+        async def _finalize_status(topic_id: int) -> None:
+            s = _status_updaters.pop(topic_id, None)
+            if s:
+                await s.stop()
+
         # --- Message dispatch loop ---
         while True:
             msg = await recv_w2b(reader)
@@ -169,6 +185,8 @@ async def _handle_worker(
                 break  # EOF / clean disconnect
 
             if isinstance(msg, AssistantTextMsg):
+                # Finalize status when first text arrives (turn producing output)
+                await _finalize_status(msg.topic_id)
                 parts = split_message(msg.text)
                 for part in parts:
                     try:
@@ -232,14 +250,8 @@ async def _handle_worker(
                 )
 
             elif isinstance(msg, StatusUpdateMsg):
-                logger.debug(
-                    "StatusUpdate from worker %s: topic=%d tool=%s elapsed=%dms calls=%d",
-                    worker_id,
-                    msg.topic_id,
-                    msg.tool_name,
-                    msg.elapsed_ms,
-                    msg.tool_calls,
-                )
+                status = await _get_or_create_status(msg.topic_id)
+                status.track_tool(msg.tool_name)
 
             elif isinstance(msg, SessionStartedMsg):
                 logger.info(
@@ -250,6 +262,7 @@ async def _handle_worker(
                 )
 
             elif isinstance(msg, SessionEndedMsg):
+                await _finalize_status(msg.topic_id)
                 if msg.error:
                     try:
                         await bot.send_message(
