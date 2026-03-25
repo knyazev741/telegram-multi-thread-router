@@ -11,6 +11,17 @@ from aiogram.exceptions import TelegramRetryAfter
 logger = logging.getLogger(__name__)
 
 
+def escape_markdown_html(text: str) -> str:
+    """Escape angle brackets so Telegram's Markdown parser does not treat them as HTML tags.
+
+    Telegram's legacy Markdown mode still tries to parse ``<tag>`` sequences as HTML
+    entities and raises ``Bad Request: can't parse entities: Unsupported start tag``
+    when it encounters unknown tags.  Replacing ``<`` / ``>`` with their HTML entity
+    equivalents prevents this while leaving the visual output unchanged.
+    """
+    return text.replace("<", "&lt;").replace(">", "&gt;")
+
+
 def split_message(text: str, max_len: int = 4096) -> list[str]:
     """Split text into Telegram-safe chunks of at most max_len characters.
 

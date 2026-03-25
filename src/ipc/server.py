@@ -30,7 +30,7 @@ from src.ipc.protocol import (
     recv_w2b,
     send_msg,
 )
-from src.bot.output import split_message
+from src.bot.output import escape_markdown_html, split_message
 from src.sessions.permissions import build_permission_keyboard, format_permission_message
 
 logger = logging.getLogger(__name__)
@@ -210,11 +210,14 @@ async def _handle_worker(
             if isinstance(msg, AssistantTextMsg):
                 parts = split_message(msg.text)
                 for part in parts:
+                    # Escape angle brackets so Telegram's Markdown parser does not
+                    # raise "Unsupported start tag" on text like <идея>.
+                    escaped_part = escape_markdown_html(part)
                     try:
                         await bot.send_message(
                             chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
-                            text=part,
+                            text=escaped_part,
                             parse_mode="Markdown",
                         )
                     except TelegramRetryAfter as e:
@@ -222,7 +225,7 @@ async def _handle_worker(
                         await bot.send_message(
                             chat_id=settings.chat_id,
                             message_thread_id=msg.topic_id,
-                            text=part,
+                            text=escaped_part,
                             parse_mode="Markdown",
                         )
                     except Exception:

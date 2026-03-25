@@ -36,7 +36,7 @@ from src.sessions.questions import QuestionManager, build_question_keyboard, for
 from src.sessions.mcp_tools import create_telegram_mcp_server
 from src.db.queries import update_session_id, update_session_model, update_session_state
 from src.bot.status import StatusUpdater
-from src.bot.output import split_message, TypingIndicator
+from src.bot.output import escape_markdown_html, split_message, TypingIndicator
 
 logger = logging.getLogger(__name__)
 
@@ -493,11 +493,14 @@ class SessionRunner:
                                 reply_to = self._current_reply_to
                                 first_text_sent = True
 
+                            # Escape angle brackets so Telegram's Markdown parser does
+                            # not raise "Unsupported start tag" on text like <идея>.
+                            escaped_part = escape_markdown_html(part)
                             try:
                                 await self._bot.send_message(
                                     chat_id=self._chat_id,
                                     message_thread_id=self.thread_id,
-                                    text=part,
+                                    text=escaped_part,
                                     parse_mode="Markdown",
                                     reply_to_message_id=reply_to,
                                 )
@@ -506,7 +509,7 @@ class SessionRunner:
                                 await self._bot.send_message(
                                     chat_id=self._chat_id,
                                     message_thread_id=self.thread_id,
-                                    text=part,
+                                    text=escaped_part,
                                     parse_mode="Markdown",
                                     reply_to_message_id=reply_to,
                                 )
