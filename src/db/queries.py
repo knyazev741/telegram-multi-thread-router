@@ -128,6 +128,26 @@ async def get_all_active_sessions() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+# ---- Bot settings ----
+
+async def get_bot_setting(key: str) -> str | None:
+    """Load a bot setting value by key."""
+    async with get_connection() as conn:
+        cursor = await conn.execute("SELECT value FROM bot_settings WHERE key=?", (key,))
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def set_bot_setting(key: str, value: str) -> None:
+    """Save a bot setting (insert or replace)."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        await conn.commit()
+
+
 # ---- Global permissions ----
 
 async def get_global_permissions() -> set[str]:

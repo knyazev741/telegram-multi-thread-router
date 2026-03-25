@@ -1,6 +1,6 @@
 # Telegram Multi-Thread Router
 
-> Run multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in Telegram — each forum topic is an isolated workspace.
+> Run multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in Telegram — each thread is an isolated workspace.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -11,28 +11,28 @@
 
 ## What is this?
 
-A Telegram bot that turns a **group chat with forum topics** into a multi-session Claude Code interface. Each topic runs an independent Claude Code session with full tool access — Bash, file editing, web search, and more.
+A Telegram bot that runs **multiple Claude Code sessions in parallel** — each thread is an independent workspace with full tool access (Bash, file editing, web search, and more).
 
 **Think of it as Claude Code CLI, but in Telegram** — with voice messages, file sharing, permission buttons, and multi-server support.
 
 ### Key Features
 
-- **1 topic = 1 session** — isolated Claude Code sessions per forum thread
-- **Orchestrator** — a meta-session that can create and manage other sessions
-- **Permission system** — tool approvals via inline buttons (auto-allow safe tools)
+- **1 thread = 1 session** — isolated Claude Code sessions per Telegram thread
+- **Orchestrator** — a dedicated Claude session that manages all other sessions via natural language
+- **Auto-mode** — per-session toggle to auto-approve all permissions (no buttons needed)
+- **Permission system** — tool approvals via inline buttons (safe tools auto-approved)
 - **Voice messages** — transcribed via Whisper and forwarded to Claude
 - **Photo & file support** — files downloaded to workdir, paths sent to Claude
-- **Multi-server** — run workers on different machines via TCP IPC
+- **Multi-server** — run sessions on different machines via TCP IPC workers
 - **Session persistence** — sessions survive bot restarts via SQLite + session resume
 - **Real-time status** — editable status message shows what Claude is doing
-- **Custom MCP tools** — Claude can reply, send files, react with emoji directly in Telegram
+- **Telegram MCP tools** — Claude can reply, send files, react with emoji directly in Telegram
 
 ## Architecture
 
 ```
-Telegram Group (Forum)
-  ├── General Topic     → /new, /list, /restart
-  ├── 🎯 Orchestrator   → Meta-session (creates/manages others)
+Telegram Bot (threads)
+  ├── 🎯 Orchestrator   → Main interface: creates/manages sessions via chat
   ├── 📁 my-project     → Claude Code session (workdir: /path/to/project)
   ├── 🔧 api-server     → Claude Code session (remote worker)
   └── ...
@@ -58,7 +58,6 @@ Telegram Group (Forum)
 - Python 3.11+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- A Telegram group chat with **forum topics enabled**
 
 ### Installation
 
@@ -82,7 +81,6 @@ Edit `.env`:
 |----------|-------------|
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
 | `OWNER_USER_ID` | Your Telegram user ID (only you can use the bot) |
-| `GROUP_CHAT_ID` | ID of the group chat with forum topics |
 | `AUTH_TOKEN` | Shared secret for TCP worker authentication |
 
 ### Run
@@ -91,25 +89,33 @@ Edit `.env`:
 python -m src
 ```
 
-The bot will create an **Orchestrator** topic automatically on first start.
+Add the bot to a Telegram group with topics enabled and send any message. The bot auto-detects the chat and creates an **🎯 Orchestrator** thread — this is the main interface for managing sessions.
 
 ## Usage
 
+### Orchestrator (main interface)
+
+The Orchestrator is a Claude Code session (Sonnet) with extra management tools. Talk to it in natural language:
+
+- *"Create a session for my-project in /home/user/my-project"*
+- *"List all sessions"*
+- *"Stop session 12345"*
+- *"Enable auto-mode for session 12345"* — auto-approves all permissions
+
+The Orchestrator is also a full Claude Code session itself — it can SSH into servers, browse filesystems, run commands.
+
 ### Commands
 
-**General topic:**
+All commands work from **any thread** (including Orchestrator):
+
 | Command | Description |
 |---------|-------------|
-| `/new <name> <workdir> [server]` | Create a new session in a forum topic |
+| `/new <name> <workdir> [server]` | Create a new session in a new thread |
 | `/list` | List all active sessions |
 | `/restart` | Graceful restart (preserves sessions) |
-
-**Inside a session topic:**
-| Command | Description |
-|---------|-------------|
 | `/stop` | Interrupt current turn (like Escape in CLI) |
-| `/close` | Stop session + delete topic |
-| `/clear`, `/compact`, `/reset` | Forwarded to Claude Code |
+| `/close` | Stop session + delete thread |
+| Any other `/command` | Forwarded to Claude Code (`/model`, `/clear`, `/compact`, etc.) |
 
 ### Input Types
 
@@ -129,7 +135,7 @@ When Claude wants to use a tool (e.g., run a bash command), you get inline butto
 [✅ Allow] [✅ Allow All] [❌ Deny]
 ```
 
-Safe tools (Read, Glob, Grep, etc.) are auto-approved. Dangerous tools require explicit approval.
+Safe tools (Read, Glob, Grep, etc.) are auto-approved. Dangerous tools require explicit approval. Use **auto-mode** (via Orchestrator) to skip all permission prompts for a session.
 
 ## Multi-Server Support
 
@@ -141,7 +147,7 @@ pip install -e .
 python -m src.ipc.client --host <bot-server-ip> --port 9800 --token $AUTH_TOKEN --worker-id my-worker
 ```
 
-**Create a session on the worker:**
+**Create a session on the worker** (via Orchestrator or `/new`):
 ```
 /new my-project /path/to/project my-worker
 ```
@@ -158,8 +164,8 @@ src/
     dispatcher.py          Dispatcher factory, startup/shutdown lifecycle
     middlewares.py          OwnerAuthMiddleware
     routers/
-      general.py           /new, /list, /restart (General topic)
-      session.py           Message forwarding, /stop, /close, permissions
+      general.py           General topic fallback (minimal)
+      session.py           All commands + message forwarding + permissions
     status.py              StatusUpdater (editable status message per turn)
     output.py              Message splitting, TypingIndicator
   sessions/

@@ -46,8 +46,8 @@ src/
     dispatcher.py      - Dispatcher factory, startup/shutdown lifecycle
     middlewares.py      - OwnerAuthMiddleware
     routers/
-      general.py       - /new, /list, /restart (General topic / no thread)
-      session.py       - Message forwarding, /stop, /close, permissions, voice/photo/doc
+      general.py       - General topic fallback (minimal, rarely fires)
+      session.py       - All commands (/new, /list, /restart, /stop, /close) + message forwarding
     status.py          - StatusUpdater (editable status message per turn)
     output.py          - split_message, TypingIndicator
   sessions/
@@ -75,18 +75,23 @@ src/
 
 ## Telegram Bot Commands
 
-**General topic (no thread / thread_id=1/None):**
+**Orchestrator thread (🎯 main interface):**
+- Natural language → create/list/stop sessions, toggle auto-mode
+- Also a full Claude Code session (SSH, filesystem, commands)
+- MCP tools: `create_session`, `list_sessions`, `stop_session`, `auto_mode`
+
+**All commands work from any thread:**
 - `/new <name> <workdir> [server]` — create session in new thread
 - `/list` — list active sessions
 - `/restart` — restart bot, resume all sessions
-
-**Inside a session thread:**
 - `/stop` — interrupt current turn (like Escape in CLI), session stays alive
 - `/close` — kill session + delete thread
-- `/clear`, `/compact`, `/reset` — forwarded to Claude Code
+- Any other `/command` → forwarded to Claude Code (`/model`, `/clear`, `/compact`, etc.)
 - Text → forwarded to Claude
 - Voice → transcribed → forwarded
 - Photo/Document → downloaded to workdir → path sent to Claude
+
+**General topic**: ignored (Telegram auto-creates new topics there)
 
 ## Security
 - All secrets in `.env` (gitignored), chmod 600

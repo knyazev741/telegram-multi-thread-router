@@ -3,8 +3,12 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.bot.routers.general import handle_general_fallback, handle_list, handle_new
-from src.bot.routers.session import handle_session_message, handle_stop
+from src.bot.routers.session import (
+    handle_new,
+    handle_list_in_session,
+    handle_session_message,
+    handle_stop,
+)
 from src.sessions.manager import SessionManager
 from src.sessions.state import SessionState
 
@@ -13,6 +17,7 @@ def _make_message(thread_id, text="hello"):
     """Create a mock Message with given thread_id."""
     msg = MagicMock()
     msg.message_thread_id = thread_id
+    msg.message_id = 1
     msg.from_user = MagicMock()
     msg.from_user.id = 12345
     msg.text = text
@@ -22,22 +27,13 @@ def _make_message(thread_id, text="hello"):
 
 
 # ---------------------------------------------------------------------------
-# General router
+# /new command
 # ---------------------------------------------------------------------------
-
-async def test_general_fallback_responds():
-    """Fallback handler replies with usage instructions."""
-    msg = _make_message(thread_id=1)
-    await handle_general_fallback(msg)
-    msg.reply.assert_called_once()
-    call_text = msg.reply.call_args[0][0]
-    assert "/new" in call_text
-
 
 async def test_handle_new_missing_args():
     """/new with too few args replies with usage."""
     from src.ipc.server import WorkerRegistry
-    msg = _make_message(thread_id=1, text="/new")
+    msg = _make_message(thread_id=42, text="/new")
     bot = AsyncMock()
     session_manager = MagicMock(spec=SessionManager)
     permission_manager = MagicMock()
@@ -47,25 +43,34 @@ async def test_handle_new_missing_args():
     assert "Usage" in msg.reply.call_args[0][0]
 
 
+# ---------------------------------------------------------------------------
+# /list command
+# ---------------------------------------------------------------------------
+
 async def test_handle_list_no_sessions():
     """/list with no active sessions replies accordingly."""
-    msg = _make_message(thread_id=1, text="/list")
+    from src.ipc.server import WorkerRegistry
+    msg = _make_message(thread_id=42, text="/list")
     session_manager = MagicMock(spec=SessionManager)
     session_manager.list_all.return_value = []
-    await handle_list(msg, session_manager)
+    worker_registry = WorkerRegistry()
+    await handle_list_in_session(msg, session_manager, worker_registry)
     msg.reply.assert_called_once()
     assert "No active sessions" in msg.reply.call_args[0][0]
 
 
 async def test_handle_list_with_sessions():
     """/list with sessions shows thread_id and workdir."""
-    msg = _make_message(thread_id=1, text="/list")
+    from src.ipc.server import WorkerRegistry
+    msg = _make_message(thread_id=42, text="/list")
     runner = MagicMock()
     runner.workdir = "/home/user/proj"
     runner.state = SessionState.IDLE
+    runner.auto_mode = False
     session_manager = MagicMock(spec=SessionManager)
     session_manager.list_all.return_value = [(42, runner)]
-    await handle_list(msg, session_manager)
+    worker_registry = WorkerRegistry()
+    await handle_list_in_session(msg, session_manager, worker_registry)
     msg.reply.assert_called_once()
     call_text = msg.reply.call_args[0][0]
     assert "42" in call_text
@@ -88,16 +93,16 @@ async def test_handle_stop_no_session():
 
 
 async def test_handle_stop_active_session():
-    """/stop calls session_manager.stop and replies."""
+    """/stop calls runner.interrupt() and replies."""
     msg = _make_message(thread_id=42, text="/stop")
     session_manager = MagicMock(spec=SessionManager)
     runner = MagicMock()
+    runner.interrupt = AsyncMock(return_value=True)
     session_manager.get.return_value = runner
-    session_manager.stop = AsyncMock()
     await handle_stop(msg, session_manager)
-    session_manager.stop.assert_called_once_with(42)
+    runner.interrupt.assert_called_once()
     msg.reply.assert_called_once()
-    assert "stopped" in msg.reply.call_args[0][0].lower()
+    assert "interrupt" in msg.reply.call_args[0][0].lower() or "Interrupted" in msg.reply.call_args[0][0]
 
 
 async def test_handle_session_message_no_runner():
@@ -132,7 +137,7 @@ async def test_handle_session_message_enqueues_and_reacts():
     session_manager.get.return_value = runner
     await handle_session_message(msg, session_manager)
     msg.react.assert_called_once()
-    runner.enqueue.assert_called_once_with("do something")
+    runner.enqueue.assert_called_once_with("do something", reply_to_message_id=msg.message_id)
 
 
 async def test_handle_session_message_forwards_slash_commands():
@@ -145,7 +150,7 @@ async def test_handle_session_message_forwards_slash_commands():
         session_manager = MagicMock(spec=SessionManager)
         session_manager.get.return_value = runner
         await handle_session_message(msg, session_manager)
-        runner.enqueue.assert_called_once_with(cmd)
+        runner.enqueue.assert_called_once_with(cmd, reply_to_message_id=msg.message_id)
         runner.enqueue.reset_mock()
 
 

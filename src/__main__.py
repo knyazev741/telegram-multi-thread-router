@@ -54,9 +54,9 @@ async def main() -> None:
     dp = build_dispatcher()
 
     logger.info(
-        "Starting bot (owner=%d, group=%d)",
+        "Starting bot (owner=%d, group=%s)",
         settings.owner_user_id,
-        settings.group_chat_id,
+        settings.group_chat_id or "auto-detect",
     )
     await dp.start_polling(bot)
 

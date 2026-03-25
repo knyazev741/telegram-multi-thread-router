@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS global_permissions (
     tool_name   TEXT    PRIMARY KEY,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS bot_settings (
+    key         TEXT    PRIMARY KEY,
+    value       TEXT    NOT NULL
+);
 """
 
 

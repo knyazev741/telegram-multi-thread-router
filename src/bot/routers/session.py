@@ -13,9 +13,11 @@ from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionCallback, PermissionManager
 from src.sessions.questions import QuestionCallback, QuestionManager, build_question_keyboard
+from src.sessions.remote import RemoteSession
 from src.sessions.state import SessionState
 from src.sessions.voice import transcribe_voice
-from src.db.queries import delete_session_and_topic
+from src.db.queries import delete_session_and_topic, insert_session, insert_topic
+from src.ipc.server import WorkerRegistry
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -130,6 +132,116 @@ async def handle_question_callback(
                 await query.message.delete()
             except Exception:
                 pass
+
+
+@session_router.message(
+    F.message_thread_id.is_not(None),
+    F.message_thread_id != 1,
+    Command("new"),
+)
+async def handle_new(
+    message: Message,
+    bot: Bot,
+    session_manager: SessionManager,
+    permission_manager: PermissionManager,
+    worker_registry: WorkerRegistry,
+) -> None:
+    """Create a new Claude session with a dedicated forum thread.
+
+    Usage: /new <name> <workdir> [server-name]
+    Works from any thread (including Orchestrator).
+    """
+    from aiogram.methods import CreateForumTopic
+
+    args = message.text.split(maxsplit=3)
+    if len(args) < 3:
+        await message.reply("Usage: /new <name> <workdir> [server-name]")
+        return
+
+    name = args[1]
+    workdir = args[2]
+    server_name = args[3] if len(args) > 3 else "local"
+
+    # Validate server connection for remote sessions
+    if server_name != "local":
+        if not worker_registry.is_connected(server_name):
+            await message.reply(f"Server '{server_name}' is not connected.")
+            return
+
+    # Create forum topic
+    topic = await bot(CreateForumTopic(
+        chat_id=settings.group_chat_id,
+        name=name,
+    ))
+    thread_id = topic.message_thread_id
+
+    # Persist to DB
+    model = "opus"
+    await insert_topic(thread_id, name)
+    await insert_session(thread_id, workdir, model=model, server=server_name)
+
+    # Start session (local or remote)
+    if server_name != "local":
+        await session_manager.create_remote(
+            thread_id=thread_id,
+            workdir=workdir,
+            worker_id=server_name,
+            worker_registry=worker_registry,
+            model=model,
+        )
+    else:
+        await session_manager.create(
+            thread_id=thread_id,
+            workdir=workdir,
+            bot=bot,
+            chat_id=settings.group_chat_id,
+            permission_manager=permission_manager,
+            model=model,
+        )
+
+    await bot.send_message(
+        chat_id=settings.group_chat_id,
+        message_thread_id=thread_id,
+        text=(
+            f"Session <b>{name}</b> started\n"
+            f"Model: <code>{model}</code>\n"
+            f"Thread: <code>{thread_id}</code>\n"
+            f"Server: {server_name}\n"
+            f"Workdir: <code>{workdir}</code>"
+        ),
+        parse_mode="HTML",
+    )
+    await message.reply(f"Session '{name}' created. Thread: <code>{thread_id}</code>", parse_mode="HTML")
+
+
+@session_router.message(
+    F.message_thread_id.is_not(None),
+    F.message_thread_id != 1,
+    Command("restart"),
+)
+async def handle_restart(message: Message, bot: Bot, session_manager: SessionManager) -> None:
+    """Restart the bot process to pick up new code. Sessions resume automatically."""
+    import os
+    import sys
+
+    await message.reply("Restarting bot... Sessions will resume automatically.")
+    logger.info("Restart requested by owner — stopping sessions before execv")
+
+    # Stop all sessions BEFORE execv to avoid orphaned Claude subprocesses
+    from src.db.queries import update_session_state
+
+    for thread_id, runner in session_manager.list_all():
+        try:
+            await runner.stop()
+            await update_session_state(thread_id, "idle")
+        except Exception as e:
+            logger.error("Error stopping session %d before restart: %s", thread_id, e)
+
+    import asyncio
+    await asyncio.sleep(1)
+
+    # Replace current process with a fresh one (same args)
+    os.execv(sys.executable, [sys.executable, "-m", "src"])
 
 
 @session_router.message(

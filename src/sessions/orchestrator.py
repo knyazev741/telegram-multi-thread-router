@@ -30,28 +30,22 @@ When the user asks to work on a project on a specific server, use create_session
 WELCOME_MESSAGE = """\
 <b>🎯 Telegram Multi-Thread Router</b>
 
-Claude Code sessions in Telegram — each topic is an isolated workspace.
+Claude Code sessions in Telegram — each thread is an isolated workspace.
 
-<b>Commands (General topic):</b>
+<b>Commands (work from any thread):</b>
 <code>/new &lt;name&gt; &lt;workdir&gt; [server]</code> — create a new session
 <code>/list</code> — list active sessions
-
-<b>Commands (inside a session topic):</b>
-<code>/stop</code> — stop the session
-<code>/close</code> — stop session + delete topic
-All other <code>/commands</code> are forwarded to Claude (<code>/model</code>, <code>/clear</code>, <code>/compact</code>, etc.)
+<code>/restart</code> — restart bot (sessions resume)
+<code>/stop</code> — interrupt current turn
+<code>/close</code> — stop session + delete thread
 
 <b>Input types:</b>
 💬 Text — forwarded to Claude
 🎤 Voice — transcribed via Whisper, then forwarded
 📷 Photo / 📎 Files — downloaded to workdir, path sent to Claude
 
-<b>Multi-server:</b>
-Connect workers on other machines with <code>python -m src.ipc.client</code>
-Then create sessions on them: <code>/new myproject /path server-name</code>
-
-<b>Orchestrator (this topic):</b>
-I can create, manage, and stop sessions for you. Just ask!
+<b>Orchestrator (this thread):</b>
+I can create, manage, and stop sessions for you. Just ask in natural language!
 """
 
 

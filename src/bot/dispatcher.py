@@ -22,15 +22,12 @@ def build_dispatcher() -> Dispatcher:
     """Create and configure the Dispatcher with all routers and middleware."""
     dp = Dispatcher()
 
-    # Owner auth + chat filter — outer middleware fires before any router filters
+    # Owner auth — outer middleware fires before any router filters
     dp.message.outer_middleware(
-        OwnerAuthMiddleware(
-            owner_id=settings.owner_user_id,
-            group_chat_id=settings.group_chat_id,
-        )
+        OwnerAuthMiddleware(owner_id=settings.owner_user_id)
     )
 
-    # General topic handles management commands (thread_id=1 or None)
+    # General topic handles management commands (thread_id=1 or None) — fallback
     dp.include_router(general_router)
 
     # Session topics handle Claude session messages (all other thread_ids)
@@ -45,6 +42,15 @@ def build_dispatcher() -> Dispatcher:
 async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     """Called when polling starts. Initialize database and SessionManager."""
     await init_db()
+
+    # Auto-detect chat_id: load from DB if not in env
+    if settings.group_chat_id is None:
+        from src.db.queries import get_bot_setting
+        saved_chat_id = await get_bot_setting("chat_id")
+        if saved_chat_id:
+            settings.group_chat_id = int(saved_chat_id)
+            logger.info("Loaded chat_id from DB: %d", settings.group_chat_id)
+
     permission_manager = PermissionManager()
     await permission_manager.load_from_db()
     dispatcher["permission_manager"] = permission_manager
@@ -52,18 +58,6 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     dispatcher["question_manager"] = question_manager
     manager = SessionManager(question_manager=question_manager)
     dispatcher["session_manager"] = manager
-
-    # Resume sessions that were active before bot stopped
-    resumed = await manager.resume_all(bot, settings.group_chat_id, permission_manager)
-    if resumed:
-        logger.info("Resumed %d session(s) from database", resumed)
-
-    # Start health monitoring background task
-    from src.sessions.health import health_check_loop
-    health_task = asyncio.create_task(
-        health_check_loop(manager, bot, settings.group_chat_id)
-    )
-    dispatcher["health_task"] = health_task
 
     # Start TCP IPC server for remote worker connections (non-fatal if port busy)
     worker_registry = WorkerRegistry()
@@ -83,16 +77,32 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
         logger.warning("IPC server failed to start (port %d busy): %s", settings.ipc_port, e)
         dispatcher["ipc_server"] = None
 
-    # Start orchestrator session
-    from src.sessions.orchestrator import ensure_orchestrator
-    orch_thread = await ensure_orchestrator(
-        bot, settings.group_chat_id, manager, permission_manager, worker_registry,
-    )
-    if orch_thread:
-        dispatcher["orchestrator_thread_id"] = orch_thread
-        logger.info("Orchestrator running in thread %d", orch_thread)
+    # Only proceed with session resume and orchestrator if chat_id is known
+    if settings.group_chat_id:
+        # Resume sessions that were active before bot stopped
+        resumed = await manager.resume_all(bot, settings.group_chat_id, permission_manager)
+        if resumed:
+            logger.info("Resumed %d session(s) from database", resumed)
 
-    logger.info("Bot startup complete — SessionManager initialized, health monitoring active")
+        # Start health monitoring background task
+        from src.sessions.health import health_check_loop
+        health_task = asyncio.create_task(
+            health_check_loop(manager, bot, settings.group_chat_id)
+        )
+        dispatcher["health_task"] = health_task
+
+        # Start orchestrator session
+        from src.sessions.orchestrator import ensure_orchestrator
+        orch_thread = await ensure_orchestrator(
+            bot, settings.group_chat_id, manager, permission_manager, worker_registry,
+        )
+        if orch_thread:
+            dispatcher["orchestrator_thread_id"] = orch_thread
+            logger.info("Orchestrator running in thread %d", orch_thread)
+    else:
+        logger.info("No chat_id configured — waiting for first message from owner in a group")
+
+    logger.info("Bot startup complete — SessionManager initialized")
 
 
 async def on_shutdown(dispatcher: Dispatcher) -> None:
