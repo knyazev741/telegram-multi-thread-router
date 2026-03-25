@@ -300,11 +300,51 @@ async def handle_document(message: Message, session_manager: SessionManager) -> 
 @session_router.message(
     F.message_thread_id.is_not(None),
     F.message_thread_id != 1,
+    Command("list"),
+)
+async def handle_list_in_session(
+    message: Message,
+    session_manager: SessionManager,
+    worker_registry: "WorkerRegistry",
+) -> None:
+    """List all active sessions — works from any thread."""
+    from src.sessions.remote import RemoteSession
+    from src.ipc.server import WorkerRegistry
+
+    sessions = session_manager.list_all()
+    if not sessions:
+        await message.reply("No active sessions.")
+        return
+
+    lines = []
+    for thread_id, runner in sessions:
+        if isinstance(runner, RemoteSession):
+            server = runner.worker_id
+            status = "(connected)" if runner.is_alive else "(disconnected)"
+        else:
+            server = "local"
+            status = ""
+        server_info = f"on <i>{server}</i> {status}".strip()
+        lines.append(
+            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}"
+        )
+
+    # Also show connected workers
+    workers = worker_registry.list_workers()
+    if workers:
+        lines.append(f"\nWorkers: {', '.join(workers)}")
+
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@session_router.message(
+    F.message_thread_id.is_not(None),
+    F.message_thread_id != 1,
 )
 async def handle_session_message(message: Message, session_manager: SessionManager) -> None:
     """Forward all text messages to the Claude session.
 
-    All slash commands except reserved ones (/stop, /close) are forwarded as raw text
+    All slash commands except reserved ones (/stop, /close, /list) are forwarded as raw text
     via runner.enqueue(text). This lets Claude handle /model, /clear, /compact, /reset,
     /help, /config etc. natively.
     """
