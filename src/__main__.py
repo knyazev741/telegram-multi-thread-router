@@ -2,6 +2,10 @@
 
 import asyncio
 import logging
+import os
+import sys
+import tempfile
+import fcntl
 
 import uvloop
 from aiogram import Bot
@@ -16,6 +20,28 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# PID file lock to prevent duplicate bot instances
+_LOCK_FILE = os.path.join(tempfile.gettempdir(), "tg-multi-thread-router.lock")
+
+
+def _acquire_lock() -> int:
+    """Acquire exclusive lock file. Returns fd on success, kills stale process if needed."""
+    fd = os.open(_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # Another instance holds the lock — read its PID and abort
+        content = os.read(fd, 64).decode().strip()
+        os.close(fd)
+        logger.error("Another bot instance is already running (PID %s). Exiting.", content)
+        sys.exit(1)
+
+    # Write our PID
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, str(os.getpid()).encode())
+    return fd
 
 
 async def main() -> None:
@@ -36,5 +62,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
-        runner.run(main())
+    lock_fd = _acquire_lock()
+    try:
+        with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
+            runner.run(main())
+    finally:
+        os.close(lock_fd)

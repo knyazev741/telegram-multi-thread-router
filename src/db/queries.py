@@ -3,14 +3,24 @@
 from src.db.connection import get_connection
 
 
-async def insert_topic(thread_id: int, name: str) -> None:
+async def insert_topic(thread_id: int, name: str, is_orchestrator: bool = False) -> None:
     """Insert a new topic record."""
     async with get_connection() as conn:
         await conn.execute(
-            "INSERT INTO topics (thread_id, name) VALUES (?, ?)",
-            (thread_id, name),
+            "INSERT INTO topics (thread_id, name, is_orchestrator) VALUES (?, ?, ?)",
+            (thread_id, name, int(is_orchestrator)),
         )
         await conn.commit()
+
+
+async def get_orchestrator_topic() -> dict | None:
+    """Return the orchestrator topic row, or None."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT thread_id, name FROM topics WHERE is_orchestrator=1 LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
 
 async def insert_session(thread_id: int, workdir: str, model: str | None = None, server: str = "local") -> None:
@@ -65,6 +75,24 @@ async def get_session_by_thread(thread_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+async def delete_session_and_topic(thread_id: int) -> None:
+    """Delete all DB records for a closed session (sessions, topics)."""
+    async with get_connection() as conn:
+        await conn.execute("DELETE FROM sessions WHERE thread_id=?", (thread_id,))
+        await conn.execute("DELETE FROM topics WHERE thread_id=?", (thread_id,))
+        await conn.commit()
+
+
+async def update_session_model(thread_id: int, model: str) -> None:
+    """Update model when Claude switches models mid-session."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "UPDATE sessions SET model=?, updated_at=datetime('now') WHERE thread_id=?",
+            (model, thread_id),
+        )
+        await conn.commit()
+
+
 async def get_all_active_sessions() -> list[dict]:
     """Return all sessions in idle or running state, joined with topic name."""
     async with get_connection() as conn:
@@ -76,3 +104,23 @@ async def get_all_active_sessions() -> list[dict]:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+# ---- Global permissions ----
+
+async def get_global_permissions() -> set[str]:
+    """Load all globally allowed tool names from DB."""
+    async with get_connection() as conn:
+        cursor = await conn.execute("SELECT tool_name FROM global_permissions")
+        rows = await cursor.fetchall()
+        return {row[0] for row in rows}
+
+
+async def save_global_permission(tool_name: str) -> None:
+    """Persist a globally allowed tool to DB."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "INSERT OR IGNORE INTO global_permissions (tool_name) VALUES (?)",
+            (tool_name,),
+        )
+        await conn.commit()

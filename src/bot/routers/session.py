@@ -5,20 +5,35 @@ import os
 import tempfile
 from pathlib import Path
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ContentType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionCallback, PermissionManager
+from src.sessions.questions import QuestionCallback, QuestionManager, build_question_keyboard
 from src.sessions.state import SessionState
 from src.sessions.voice import transcribe_voice
+from src.db.queries import delete_session_and_topic
 from src.config import settings
 
 logger = logging.getLogger(__name__)
 
 session_router = Router(name="sessions")
+
+
+async def _react(message: Message, emoji: str) -> None:
+    """Add an emoji reaction to a message, suppressing errors."""
+    try:
+        await message.react(reaction=[ReactionTypeEmoji(emoji=emoji)])
+    except Exception as e:
+        logger.warning("Failed to add reaction: %s", e)
+
+
+def _get_runner_or_none(session_manager: SessionManager, thread_id: int):
+    """Get runner, return None if missing or stopped."""
+    return session_manager.get(thread_id)
 
 
 @session_router.callback_query(PermissionCallback.filter())
@@ -46,23 +61,75 @@ async def handle_permission_callback(
     # CRITICAL: call answer() before any other awaits to dismiss spinner (Pitfall 1)
     await query.answer()
 
-    # Remove inline keyboard and append resolution label to the message
-    action_labels = {
-        "allow": "Allowed once",
-        "always": "Always allowed",
-        "deny": "Denied",
-    }
-    label = action_labels.get(callback_data.action, callback_data.action)
-
+    # Delete the permission message after resolving
     if query.message:
         try:
-            await query.message.edit_text(
-                query.message.text + f"\n\n<b>Result:</b> {label}",
-                parse_mode="HTML",
-                reply_markup=None,
-            )
+            await query.message.delete()
         except Exception as e:
-            logger.warning("Failed to edit permission message: %s", e)
+            logger.warning("Failed to delete permission message: %s", e)
+
+
+@session_router.callback_query(QuestionCallback.filter())
+async def handle_question_callback(
+    query: CallbackQuery,
+    callback_data: QuestionCallback,
+    question_manager: QuestionManager,
+) -> None:
+    """Handle inline button taps for AskUserQuestion.
+
+    Single-select: one tap answers the question.
+    Multi-select: taps toggle, "Done" confirms.
+    """
+    if query.from_user and query.from_user.id != settings.owner_user_id:
+        await query.answer()
+        return
+
+    result = question_manager.handle_selection(
+        callback_data.request_id,
+        callback_data.q_idx,
+        callback_data.opt_idx,
+    )
+
+    if result is None:
+        await query.answer(text="This question has expired", show_alert=True)
+        return
+
+    action = result["action"]
+
+    if action == "update_keyboard":
+        # Multi-select toggle — rebuild keyboard with checkmarks
+        await query.answer()
+        keyboard = build_question_keyboard(
+            result["request_id"],
+            result["q_idx"],
+            result["question"],
+            result["selected"],
+        )
+        if query.message:
+            try:
+                await query.message.edit_reply_markup(reply_markup=keyboard)
+            except Exception as e:
+                logger.warning("Failed to update question keyboard: %s", e)
+
+    elif action == "question_answered":
+        # Single question answered — delete its message
+        await query.answer()
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception as e:
+                logger.warning("Failed to delete question message: %s", e)
+
+    elif action == "all_done":
+        # All questions answered — delete all remaining question messages
+        await query.answer()
+        pqs = question_manager.get_pending(callback_data.request_id)
+        # Delete the current message
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
 
 
 @session_router.message(
@@ -85,10 +152,50 @@ async def handle_stop(message: Message, session_manager: SessionManager) -> None
 @session_router.message(
     F.message_thread_id.is_not(None),
     F.message_thread_id != 1,
+    Command("close"),
+)
+async def handle_close(message: Message, bot: Bot, session_manager: SessionManager) -> None:
+    """Close session and delete the forum topic.
+
+    Stops the Claude session, cleans up DB records, and removes the Telegram topic.
+    """
+    thread_id = message.message_thread_id
+    runner = session_manager.get(thread_id)
+
+    # Stop session if active
+    if runner is not None:
+        await session_manager.stop(thread_id)
+
+    # Clean up DB
+    await delete_session_and_topic(thread_id)
+
+    # Delete forum topic (fall back to closing if deletion fails)
+    try:
+        await bot.delete_forum_topic(
+            chat_id=settings.group_chat_id,
+            message_thread_id=thread_id,
+        )
+    except Exception:
+        logger.warning("Could not delete topic %d, trying to close instead", thread_id)
+        try:
+            await bot.close_forum_topic(
+                chat_id=settings.group_chat_id,
+                message_thread_id=thread_id,
+            )
+        except Exception as e:
+            logger.error("Could not close topic %d: %s", thread_id, e)
+
+
+@session_router.message(
+    F.message_thread_id.is_not(None),
+    F.message_thread_id != 1,
     F.content_type == ContentType.VOICE,
 )
 async def handle_voice(message: Message, session_manager: SessionManager) -> None:
-    """Transcribe voice message and enqueue text to Claude session (INPT-02)."""
+    """Transcribe voice message and enqueue text to Claude session (INPT-02).
+
+    Reaction flow: 🎤 on receipt (transcribing) → 👀 when enqueued to session.
+    """
     thread_id = message.message_thread_id
     runner = session_manager.get(thread_id)
 
@@ -99,11 +206,8 @@ async def handle_voice(message: Message, session_manager: SessionManager) -> Non
         await message.reply("Session is stopped. Use /new to create a new one.")
         return
 
-    # React with 👀 to confirm receipt
-    try:
-        await message.react(reaction=[ReactionTypeEmoji(emoji="👀")])
-    except Exception as e:
-        logger.warning("Failed to add reaction: %s", e)
+    # 🎤 = transcribing (not yet in session)
+    await _react(message, "🎤")
 
     tmp_path = None
     try:
@@ -114,7 +218,9 @@ async def handle_voice(message: Message, session_manager: SessionManager) -> Non
         if not text.strip():
             await message.reply("Could not transcribe voice message.")
             return
-        await runner.enqueue(text)
+        # 👀 = enqueued to Claude session
+        await _react(message, "👀")
+        await runner.enqueue(text, reply_to_message_id=message.message_id)
     except Exception as e:
         logger.error("Voice transcription error in thread %d: %s", thread_id, e)
         await message.reply(f"Voice transcription failed: {e}")
@@ -143,19 +249,15 @@ async def handle_photo(message: Message, session_manager: SessionManager) -> Non
         await message.reply("Session is stopped. Use /new to create a new one.")
         return
 
-    # React with 👀 to confirm receipt
-    try:
-        await message.react(reaction=[ReactionTypeEmoji(emoji="👀")])
-    except Exception as e:
-        logger.warning("Failed to add reaction: %s", e)
-
     try:
         photo = message.photo[-1]
         dest = Path(runner.workdir) / f"photo_{photo.file_unique_id}.jpg"
         await message.bot.download(file=photo.file_id, destination=str(dest))
         caption = message.caption or ""
         enqueue_text = f"User sent a photo: {dest}\n{caption}".strip()
-        await runner.enqueue(enqueue_text)
+        # 👀 = enqueued to Claude session
+        await _react(message, "👀")
+        await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
     except Exception as e:
         logger.error("Photo download error in thread %d: %s", thread_id, e)
         await message.reply(f"Failed to download photo: {e}")
@@ -178,19 +280,15 @@ async def handle_document(message: Message, session_manager: SessionManager) -> 
         await message.reply("Session is stopped. Use /new to create a new one.")
         return
 
-    # React with 👀 to confirm receipt
-    try:
-        await message.react(reaction=[ReactionTypeEmoji(emoji="👀")])
-    except Exception as e:
-        logger.warning("Failed to add reaction: %s", e)
-
     try:
         filename = message.document.file_name or f"file_{message.document.file_unique_id}"
         dest = Path(runner.workdir) / filename
         await message.bot.download(file=message.document.file_id, destination=str(dest))
         caption = message.caption or ""
         enqueue_text = f"User sent file: {filename} at {dest}\n{caption}".strip()
-        await runner.enqueue(enqueue_text)
+        # 👀 = enqueued to Claude session
+        await _react(message, "👀")
+        await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
     except Exception as e:
         logger.error("Document download error in thread %d: %s", thread_id, e)
         await message.reply(f"Failed to download file: {e}")
@@ -201,10 +299,11 @@ async def handle_document(message: Message, session_manager: SessionManager) -> 
     F.message_thread_id != 1,
 )
 async def handle_session_message(message: Message, session_manager: SessionManager) -> None:
-    """Forward text messages to the Claude session, including /clear /compact /reset.
+    """Forward all text messages to the Claude session.
 
-    Note: /clear, /compact, /reset are NOT intercepted by Command filters — they are
-    forwarded as raw text via runner.enqueue(text). This lets Claude handle them internally.
+    All slash commands except reserved ones (/stop, /close) are forwarded as raw text
+    via runner.enqueue(text). This lets Claude handle /model, /clear, /compact, /reset,
+    /help, /config etc. natively.
     """
     thread_id = message.message_thread_id
     runner = session_manager.get(thread_id)
@@ -220,11 +319,8 @@ async def handle_session_message(message: Message, session_manager: SessionManag
     if not text:
         return
 
-    # React with 👀 to confirm receipt
-    try:
-        await message.react(reaction=[ReactionTypeEmoji(emoji="👀")])
-    except Exception as e:
-        logger.warning("Failed to add reaction: %s", e)
+    # 👀 = enqueued to Claude session
+    await _react(message, "👀")
 
-    # Enqueue to session (will wait if Claude is processing current turn)
-    await runner.enqueue(text)
+    # Enqueue to session with reply tracking
+    await runner.enqueue(text, reply_to_message_id=message.message_id)

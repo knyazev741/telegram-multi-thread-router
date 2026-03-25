@@ -91,7 +91,10 @@ async def start_ipc_server(
             )
         )
 
-    server = await asyncio.start_server(handle_connection, host, port)
+    server = await asyncio.start_server(
+        handle_connection, host, port,
+        reuse_address=True,
+    )
     logger.info("IPC server listening on %s:%d", host, port)
     return server
 

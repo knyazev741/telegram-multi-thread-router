@@ -7,6 +7,7 @@ from typing import Optional
 from aiogram import Bot
 
 from src.sessions.permissions import PermissionManager
+from src.sessions.questions import QuestionManager
 from src.sessions.remote import RemoteSession
 from src.sessions.runner import SessionRunner
 
@@ -16,9 +17,10 @@ logger = logging.getLogger(__name__)
 class SessionManager:
     """Manages the lifecycle of all active SessionRunner and RemoteSession instances."""
 
-    def __init__(self) -> None:
+    def __init__(self, question_manager: QuestionManager | None = None) -> None:
         self._sessions: dict[int, SessionRunner | RemoteSession] = {}
         self._lock = asyncio.Lock()
+        self._question_manager = question_manager
 
     async def create(
         self,
@@ -43,6 +45,7 @@ class SessionManager:
                 bot=bot,
                 chat_id=chat_id,
                 permission_manager=permission_manager,
+                question_manager=self._question_manager,
                 session_id=session_id,
                 model=model,
             )
@@ -103,12 +106,17 @@ class SessionManager:
         """Resume all local sessions that were active when bot last stopped.
 
         Remote sessions are skipped — they re-register when the worker reconnects.
+        Orchestrator is skipped — ensure_orchestrator() handles it with proper MCP tools.
         Returns number of successfully resumed sessions.
         """
-        from src.db.queries import get_resumable_sessions, update_session_state
+        from src.db.queries import get_resumable_sessions, get_orchestrator_topic, update_session_state
 
         rows = await get_resumable_sessions()
         resumed = 0
+
+        # Get orchestrator thread_id to skip it (ensure_orchestrator handles it)
+        orch = await get_orchestrator_topic()
+        orch_thread_id = orch["thread_id"] if orch else None
 
         for row in rows:
             thread_id = row["thread_id"]
@@ -122,6 +130,11 @@ class SessionManager:
                 logger.info(
                     "Skipping remote session topic %d (server=%s) on resume", thread_id, server
                 )
+                continue
+
+            # Skip orchestrator — ensure_orchestrator() handles it with proper MCP tools
+            if thread_id == orch_thread_id:
+                logger.info("Skipping orchestrator topic %d on resume (handled separately)", thread_id)
                 continue
 
             try:

@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS message_history (
     content     TEXT    NOT NULL,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS global_permissions (
+    tool_name   TEXT    PRIMARY KEY,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -56,11 +61,15 @@ async def init_db(db_path: Path | None = None) -> None:
         await conn.execute("PRAGMA journal_mode=WAL;")
         await conn.execute("PRAGMA foreign_keys=ON;")
         await conn.executescript(SCHEMA_SQL)
-        # Migration: add model column if not present (idempotent)
-        try:
-            await conn.execute("ALTER TABLE sessions ADD COLUMN model TEXT")
-        except Exception:
-            pass  # Column already exists
+        # Migrations (idempotent)
+        for migration in [
+            "ALTER TABLE sessions ADD COLUMN model TEXT",
+            "ALTER TABLE topics ADD COLUMN is_orchestrator INTEGER NOT NULL DEFAULT 0",
+        ]:
+            try:
+                await conn.execute(migration)
+            except Exception:
+                pass  # Column already exists
         await conn.commit()
 
     logger.info("Database initialized at %s (WAL mode)", path)

@@ -13,6 +13,7 @@ from src.db.schema import init_db
 from src.ipc.server import WorkerRegistry, start_ipc_server
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionManager
+from src.sessions.questions import QuestionManager
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,11 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     """Called when polling starts. Initialize database and SessionManager."""
     await init_db()
     permission_manager = PermissionManager()
+    await permission_manager.load_from_db()
     dispatcher["permission_manager"] = permission_manager
-    manager = SessionManager()
+    question_manager = QuestionManager()
+    dispatcher["question_manager"] = question_manager
+    manager = SessionManager(question_manager=question_manager)
     dispatcher["session_manager"] = manager
 
     # Resume sessions that were active before bot stopped
@@ -61,25 +65,38 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
     )
     dispatcher["health_task"] = health_task
 
-    # Start TCP IPC server for remote worker connections
+    # Start TCP IPC server for remote worker connections (non-fatal if port busy)
     worker_registry = WorkerRegistry()
     dispatcher["worker_registry"] = worker_registry
-    ipc_server = await start_ipc_server(
-        settings.ipc_host,
-        settings.ipc_port,
-        settings.auth_token,
-        bot,
-        manager,
-        permission_manager,
-        worker_registry,
+    try:
+        ipc_server = await start_ipc_server(
+            settings.ipc_host,
+            settings.ipc_port,
+            settings.auth_token,
+            bot,
+            manager,
+            permission_manager,
+            worker_registry,
+        )
+        dispatcher["ipc_server"] = ipc_server
+    except OSError as e:
+        logger.warning("IPC server failed to start (port %d busy): %s", settings.ipc_port, e)
+        dispatcher["ipc_server"] = None
+
+    # Start orchestrator session
+    from src.sessions.orchestrator import ensure_orchestrator
+    orch_thread = await ensure_orchestrator(
+        bot, settings.group_chat_id, manager, permission_manager, worker_registry,
     )
-    dispatcher["ipc_server"] = ipc_server
+    if orch_thread:
+        dispatcher["orchestrator_thread_id"] = orch_thread
+        logger.info("Orchestrator running in thread %d", orch_thread)
 
     logger.info("Bot startup complete — SessionManager initialized, health monitoring active")
 
 
 async def on_shutdown(dispatcher: Dispatcher) -> None:
-    """Called when polling stops. Cancel health task and stop all active sessions."""
+    """Called when polling stops. Graceful shutdown preserves session state for resume."""
     # Cancel health check
     health_task: asyncio.Task | None = dispatcher.get("health_task")
     if health_task:
@@ -89,19 +106,24 @@ async def on_shutdown(dispatcher: Dispatcher) -> None:
         except asyncio.CancelledError:
             pass
 
-    # Close IPC server before stopping sessions
+    # Close IPC server
     ipc_server: asyncio.Server | None = dispatcher.get("ipc_server")
     if ipc_server:
         ipc_server.close()
         await ipc_server.wait_closed()
 
-    # Stop all active sessions
+    # Disconnect Claude SDK clients but keep DB state as idle (NOT stopped)
+    # so resume_all picks them up on next startup
     manager: SessionManager | None = dispatcher.get("session_manager")
     if manager:
+        from src.db.queries import update_session_state
         for thread_id, runner in manager.list_all():
             try:
+                # Ensure session_id is saved, then disconnect SDK without marking stopped
                 await runner.stop()
+                # Override: mark as idle so resume_all picks it up
+                await update_session_state(thread_id, "idle")
             except Exception as e:
                 logger.error("Error stopping session %d: %s", thread_id, e)
 
-    logger.info("Bot shutting down — all sessions stopped")
+    logger.info("Bot shutting down — sessions preserved for resume")

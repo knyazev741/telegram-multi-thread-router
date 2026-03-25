@@ -54,8 +54,9 @@ async def handle_new(
     thread_id = topic.message_thread_id
 
     # Persist to DB
+    model = "opus"
     await insert_topic(thread_id, name)
-    await insert_session(thread_id, workdir, server=server_name)
+    await insert_session(thread_id, workdir, model=model, server=server_name)
 
     # Start session (local or remote)
     if server_name != "local":
@@ -64,6 +65,7 @@ async def handle_new(
             workdir=workdir,
             worker_id=server_name,
             worker_registry=worker_registry,
+            model=model,
         )
     else:
         await session_manager.create(
@@ -72,14 +74,22 @@ async def handle_new(
             bot=bot,
             chat_id=settings.group_chat_id,
             permission_manager=permission_manager,
+            model=model,
         )
 
     await bot.send_message(
         chat_id=settings.group_chat_id,
         message_thread_id=thread_id,
-        text=f"Session '{name}' started on {server_name}. Working directory: {workdir}",
+        text=(
+            f"✅ Session <b>{name}</b> started\n"
+            f"Model: <code>{model}</code>\n"
+            f"Thread: <code>{thread_id}</code>\n"
+            f"Server: {server_name}\n"
+            f"Workdir: <code>{workdir}</code>"
+        ),
+        parse_mode="HTML",
     )
-    await message.reply(f"Session '{name}' created in new topic.")
+    await message.reply(f"Session '{name}' created. Thread: <code>{thread_id}</code>", parse_mode="HTML")
 
 
 @general_router.message(F.message_thread_id.in_({1, None}), Command("list"))
@@ -106,10 +116,49 @@ async def handle_list(message: Message, session_manager: SessionManager) -> None
     await message.reply("\n".join(lines), parse_mode="HTML")
 
 
+@general_router.message(F.message_thread_id.in_({1, None}), Command("restart"))
+async def handle_restart(
+    message: Message,
+    bot: Bot,
+    session_manager: SessionManager,
+) -> None:
+    """Restart the bot process to pick up new code. Sessions resume automatically."""
+    import os
+    import sys
+
+    await message.reply("🔄 Restarting bot... Sessions will resume automatically.")
+    logger.info("Restart requested by owner — stopping sessions before execv")
+
+    # Stop all sessions BEFORE execv to avoid orphaned Claude subprocesses
+    await _graceful_stop_all(session_manager)
+
+    # Give Telegram time to send the reply
+    import asyncio
+    await asyncio.sleep(1)
+
+    # Replace current process with a fresh one (same args)
+    os.execv(sys.executable, [sys.executable, "-m", "src"])
+
+
+async def _graceful_stop_all(session_manager: SessionManager) -> None:
+    """Stop all sessions gracefully, marking them as idle for resume."""
+    from src.db.queries import update_session_state
+
+    for thread_id, runner in session_manager.list_all():
+        try:
+            await runner.stop()
+            # Override to idle so resume_all picks them up on next startup
+            await update_session_state(thread_id, "idle")
+        except Exception as e:
+            logger.error("Error stopping session %d before restart: %s", thread_id, e)
+
+
 @general_router.message(F.message_thread_id.in_({1, None}))
 async def handle_general_fallback(message: Message) -> None:
     """Catch-all for unrecognized messages in General topic."""
     logger.info("General topic message: %s", message.text or "(no text)")
     await message.reply(
-        "Use /new <name> <workdir> [server-name] to create a session, or /list to see active sessions."
+        "Use /new <name> <workdir> [server-name] to create a session,\n"
+        "/list to see active sessions,\n"
+        "/close inside a topic to close the session and delete the topic."
     )

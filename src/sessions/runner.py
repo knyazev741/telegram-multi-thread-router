@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from claude_agent_sdk import (
@@ -11,6 +12,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     AssistantMessage,
     ResultMessage,
+    SystemMessage,
     TextBlock,
     ToolUseBlock,
     PermissionResultAllow,
@@ -18,23 +20,90 @@ from claude_agent_sdk import (
     PermissionUpdate,
     HookMatcher,
 )
-from claude_agent_sdk.types import PermissionRuleValue
+from claude_agent_sdk.types import (
+    PermissionRuleValue,
+    RateLimitEvent,
+    TaskStartedMessage,
+    TaskProgressMessage,
+    TaskNotificationMessage,
+)
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 
 from src.sessions.state import SessionState
 from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
+from src.sessions.questions import QuestionManager, build_question_keyboard, format_question_message
 from src.sessions.mcp_tools import create_telegram_mcp_server
-from src.db.queries import update_session_id, update_session_state
+from src.db.queries import update_session_id, update_session_model, update_session_state
 from src.bot.status import StatusUpdater
 from src.bot.output import split_message, TypingIndicator
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _QueueItem:
+    """A queued user message with optional reply tracking."""
+    text: str | None  # None = stop sentinel
+    reply_to_message_id: int | None = None
+
+
 async def _dummy_pretool_hook(input_data, tool_use_id, context):
     """Required PreToolUse hook — without this, can_use_tool never fires (SDK issue #18735)."""
+    tool_name = context.get("tool_name", "unknown") if isinstance(context, dict) else getattr(context, "tool_name", "unknown")
+    logger.debug("PreToolUse hook fired for tool: %s", tool_name)
     return {"continue_": True}
+
+
+async def _make_ask_user_hook(runner: SessionRunner):
+    """Create a PreToolUse hook that intercepts AskUserQuestion and proxies it to Telegram."""
+
+    async def _hook(input_data, tool_use_id, context):
+        logger.info("AskUserQuestion hook fired! thread=%d input_keys=%s", runner.thread_id, list(input_data.keys()))
+        if runner._question_manager is None:
+            logger.warning("AskUserQuestion hook: no question_manager, passing through")
+            return {"continue_": True}
+
+        questions = input_data.get("questions", [])
+        if not questions:
+            logger.warning("AskUserQuestion hook: no questions in input_data")
+            return {"continue_": True}
+
+        request_id, future = runner._question_manager.create_request(questions)
+
+        # Send each question as a separate Telegram message with inline buttons
+        for i, question in enumerate(questions):
+            text = format_question_message(question)
+            keyboard = build_question_keyboard(request_id, i, question)
+            try:
+                sent = await runner._bot.send_message(
+                    chat_id=runner._chat_id,
+                    message_thread_id=runner.thread_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+                runner._question_manager.add_message_id(request_id, sent.message_id)
+            except Exception as e:
+                logger.error("Failed to send question %d: %s", i, e)
+
+        # Wait for user to answer all questions
+        try:
+            answers = await asyncio.wait_for(future, timeout=300.0)
+        except asyncio.TimeoutError:
+            runner._question_manager.expire(request_id)
+            await runner._bot.send_message(
+                chat_id=runner._chat_id,
+                message_thread_id=runner.thread_id,
+                text="⏱ Questions timed out",
+            )
+            return {"decision": "block", "reason": "User did not respond within 5 minutes"}
+
+        # Block the tool and return answers via reason — Claude sees this as the tool output
+        import json
+        return {"decision": "block", "reason": json.dumps({"answers": answers})}
+
+    return _hook
 
 
 def _build_system_prompt(workdir: str) -> str:
@@ -58,66 +127,107 @@ class SessionRunner:
         bot: Bot,
         chat_id: int,
         permission_manager: PermissionManager,
+        question_manager: QuestionManager | None = None,
         session_id: str | None = None,
         model: str | None = None,
     ) -> None:
         self.thread_id = thread_id
-        self.workdir = workdir
+        self.workdir = str(Path(workdir).expanduser())
         self.session_id = session_id
         self.model = model
         self._bot = bot
         self._chat_id = chat_id
         self._permission_manager = permission_manager
-        self._allowed_tools: set[str] = {"Read", "Glob", "Grep", "Agent"}  # PERM-07 default safe tools
+        self._question_manager = question_manager
+        self._allowed_tools: set[str] = set()  # Session-local allowed tools (populated from global + local)
         self.state = SessionState.IDLE
         self._client: ClaudeSDKClient | None = None
-        self._message_queue: asyncio.Queue[str | None] = asyncio.Queue()  # None is stop sentinel
+        self._message_queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._status: StatusUpdater | None = None
         self._typing: TypingIndicator | None = None
+        self._extra_mcp: dict | None = None  # Additional MCP servers (e.g. orchestrator tools)
+        self._system_prompt_override: str | None = None  # Override default system prompt
+        self._last_seen_model: str | None = None  # Track model changes across turns
+        self._current_reply_to: int | None = None  # message_id to reply to for current turn
+        self._effort: str | None = None  # Track effort level (updated from SDK system messages)
+
+        # Initialize allowed tools from global permissions
+        self._allowed_tools.update(self._permission_manager.get_global_allowed())
 
     async def start(self) -> None:
         """Launch the runner asyncio task."""
         self._task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
-        """Main loop: own the ClaudeSDKClient context, process messages from queue."""
-        system_prompt = _build_system_prompt(self.workdir)
+        """Main loop: own the ClaudeSDKClient context, process messages from queue.
+
+        Messages arriving during a turn are injected mid-turn via client.query()
+        (the SDK supports bidirectional concurrent query + receive_response).
+        """
+        system_prompt = self._system_prompt_override or _build_system_prompt(self.workdir)
         mcp_server = create_telegram_mcp_server(self._bot, self._chat_id, self.thread_id)
+        mcp_servers = {"telegram": mcp_server}
+        if self._extra_mcp:
+            mcp_servers.update(self._extra_mcp)
+        # Build hooks — dummy PreToolUse hook is required for can_use_tool to fire (SDK issue #18735)
+        # AskUserQuestion is handled in _can_use_tool, not via hooks
+        hooks = {
+            "PreToolUse": [
+                HookMatcher(matcher=None, hooks=[_dummy_pretool_hook]),
+            ],
+        }
         options = ClaudeAgentOptions(
             cwd=self.workdir,
             model=self.model,
             system_prompt=system_prompt,
             can_use_tool=self._can_use_tool,
-            hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[_dummy_pretool_hook])]},
+            hooks=hooks,
             resume=self.session_id,
             include_partial_messages=True,
-            mcp_servers={"telegram": mcp_server},
+            mcp_servers=mcp_servers,
         )
         try:
             async with ClaudeSDKClient(options=options) as client:
                 self._client = client
+
+                # Start mid-turn injector task
+                inject_task = asyncio.create_task(self._inject_loop(client))
+
                 while self.state != SessionState.STOPPED:
-                    text = await self._message_queue.get()
-                    if text is None:  # stop sentinel
+                    item = await self._message_queue.get()
+                    if item.text is None:  # stop sentinel
                         break
                     self.state = SessionState.RUNNING
-                    # Create per-turn UX helpers
-                    self._status = StatusUpdater(self._bot, self._chat_id, self.thread_id)
+                    self._current_reply_to = item.reply_to_message_id
+                    # Create per-turn UX helpers with session metadata
+                    self._status = StatusUpdater(
+                        self._bot, self._chat_id, self.thread_id,
+                        session_id=self.session_id,
+                        model=self._last_seen_model or self.model,
+                        effort=self._effort,
+                    )
                     self._typing = TypingIndicator(self._bot, self._chat_id, self.thread_id)
                     await self._status.start_turn()
                     await self._typing.start()
-                    await client.query(text)
+                    await client.query(item.text)
                     await self._drain_response(client)
                     # Stop typing indicator (status finalized inside _drain_response on ResultMessage)
                     if self._typing:
                         await self._typing.stop()
                         self._typing = None
+                    self._current_reply_to = None
                     if self.state == SessionState.INTERRUPTING:
                         self.state = SessionState.STOPPED
                         break
                     self.state = SessionState.IDLE
                     await update_session_state(self.thread_id, "idle")
+
+                inject_task.cancel()
+                try:
+                    await inject_task
+                except asyncio.CancelledError:
+                    pass
         except Exception as e:
             logger.error("Session error for thread %d: %s", self.thread_id, e)
             self.state = SessionState.STOPPED
@@ -127,18 +237,53 @@ class SessionRunner:
             if self._status:
                 await self._status.stop()
                 self._status = None
-            try:
-                error_text = f"❌ Error: {type(e).__name__}\n{e}"
-                await self._bot.send_message(
-                    chat_id=self._chat_id,
-                    message_thread_id=self.thread_id,
-                    text=error_text,
-                    parse_mode="HTML",
-                )
-            except Exception:
-                logger.exception("Failed to send error message to thread %d", self.thread_id)
+            # Don't send error for expected shutdown errors (SIGTERM = exit 143)
+            if self.state != SessionState.INTERRUPTING and "terminated process" not in str(e).lower():
+                try:
+                    error_text = f"❌ Error: {type(e).__name__}\n{e}"
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=error_text,
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    logger.warning("Failed to send error message to thread %d", self.thread_id)
         finally:
             self._client = None
+
+    async def _inject_loop(self, client: ClaudeSDKClient) -> None:
+        """Background task: inject queued messages mid-turn via client.query().
+
+        While the main loop is draining a response, new messages from the user
+        are picked up here and injected directly into the running session.
+        """
+        try:
+            while True:
+                # Only inject when we're in RUNNING state (mid-turn)
+                # When IDLE, the main loop will pick up from the queue normally
+                if self.state != SessionState.RUNNING:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                # Non-blocking check for queued messages
+                try:
+                    item = self._message_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                if item.text is None:
+                    # Stop sentinel — put it back for the main loop
+                    await self._message_queue.put(item)
+                    break
+
+                # Inject mid-turn
+                logger.info("Injecting mid-turn message in thread %d", self.thread_id)
+                self._current_reply_to = item.reply_to_message_id
+                await client.query(item.text)
+        except asyncio.CancelledError:
+            pass
 
     async def _can_use_tool(
         self,
@@ -148,12 +293,23 @@ class SessionRunner:
     ) -> PermissionResultAllow | PermissionResultDeny:
         """Permission callback — auto-approves safe tools, prompts user for others via Telegram.
 
-        Auto-approved tools: Read, Glob, Grep, Agent (PERM-07).
-        Awaits user response via asyncio.Future with 5-minute timeout (PERM-05).
-        "Allow always" updates both Python-side set and SDK permission engine (PERM-06).
+        Special handling for AskUserQuestion: shows questions in Telegram, collects answers,
+        and returns them as updated_input (mimicking the CLI's onAllow with answers).
+
+        Checks global allowed tools first, then session-local.
+        "Allow always" saves to global persistent set via PermissionManager.
         """
-        # Auto-approve pre-approved tools without prompting (PERM-07)
+        # AskUserQuestion — proxy questions to Telegram inline buttons
+        if tool_name == "AskUserQuestion" and self._question_manager is not None:
+            return await self._handle_ask_user_question(input_data)
+
+        # Check global + session-local allowed tools
         if tool_name in self._allowed_tools:
+            return PermissionResultAllow(updated_input=input_data)
+
+        # Also check global (may have been updated by another session)
+        if self._permission_manager.is_globally_allowed(tool_name):
+            self._allowed_tools.add(tool_name)
             return PermissionResultAllow(updated_input=input_data)
 
         # Transition to WAITING_PERMISSION state
@@ -185,6 +341,8 @@ class SessionRunner:
         if action == "allow":
             return PermissionResultAllow(updated_input=input_data)
         elif action == "always":
+            # Add to global persistent set
+            await self._permission_manager.allow_globally(tool_name)
             self._allowed_tools.add(tool_name)
             return PermissionResultAllow(
                 updated_input=input_data,
@@ -199,22 +357,144 @@ class SessionRunner:
         else:  # "deny"
             return PermissionResultDeny(message="Denied by user")
 
+    async def _handle_ask_user_question(self, input_data: dict) -> PermissionResultAllow | PermissionResultDeny:
+        """Handle AskUserQuestion by showing questions in Telegram and collecting answers.
+
+        Returns PermissionResultAllow with updated_input containing the user's answers,
+        mimicking the CLI's onAllow({...input, answers: {...}}) behavior.
+        """
+        questions = input_data.get("questions", [])
+        if not questions:
+            return PermissionResultAllow(updated_input=input_data)
+
+        prev_state = self.state
+        self.state = SessionState.WAITING_PERMISSION
+
+        request_id, future = self._question_manager.create_request(questions)
+
+        # Send each question as a Telegram message with inline buttons
+        for i, question in enumerate(questions):
+            text = format_question_message(question)
+            keyboard = build_question_keyboard(request_id, i, question)
+            try:
+                sent = await self._bot.send_message(
+                    chat_id=self._chat_id,
+                    message_thread_id=self.thread_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+                self._question_manager.add_message_id(request_id, sent.message_id)
+            except Exception as e:
+                logger.error("Failed to send question %d to thread %d: %s", i, self.thread_id, e)
+
+        try:
+            answers = await asyncio.wait_for(future, timeout=300.0)
+        except asyncio.TimeoutError:
+            self._question_manager.expire(request_id)
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                message_thread_id=self.thread_id,
+                text="⏱ Questions timed out",
+            )
+            self.state = prev_state
+            return PermissionResultDeny(message="User did not answer within 5 minutes")
+        finally:
+            self.state = prev_state
+
+        # Return allow with answers merged into input (like CLI's onAllow)
+        updated = {**input_data, "answers": answers}
+        logger.info("AskUserQuestion answered in thread %d: %s", self.thread_id, answers)
+        return PermissionResultAllow(updated_input=updated)
+
+    async def _handle_system_message(self, msg: SystemMessage) -> None:
+        """Handle SDK system messages and notify user in Telegram.
+
+        Known subtypes:
+          - compact_summary / compact_complete — conversation was compacted
+          - Any other subtype — log and optionally notify
+        """
+        subtype = msg.subtype
+        data = msg.data
+        logger.info("SystemMessage in thread %d: subtype=%s data=%s", self.thread_id, subtype, data)
+
+        # Map known subtypes to user-friendly notifications
+        notification = None
+        if "compact" in subtype:
+            # Compact completed — extract summary if available
+            summary = data.get("summary", data.get("message", ""))
+            if summary:
+                notification = f"📦 Compact: {summary}"
+            else:
+                notification = "📦 Conversation compacted"
+        elif subtype == "model_change":
+            model = data.get("model", "unknown")
+            effort = data.get("effort")
+            if effort:
+                self._effort = effort
+            notification = f"🔄 Model: <code>{model}</code>"
+            if effort:
+                notification += f" · {effort}"
+
+        if notification:
+            try:
+                await self._bot.send_message(
+                    chat_id=self._chat_id,
+                    message_thread_id=self.thread_id,
+                    text=notification,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.warning("Failed to send system notification: %s", e)
+
     async def _drain_response(self, client: ClaudeSDKClient) -> None:
-        """Receive all messages from the current turn, forwarding text to Telegram with status tracking."""
+        """Receive all messages from the current turn, forwarding text to Telegram with status tracking.
+
+        First text message in each turn is sent as a reply to the user's original message.
+        """
         tool_count = 0
+        first_text_sent = False
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
+                # Track model silently (no Telegram notification)
+                if hasattr(msg, "model") and msg.model:
+                    if self._last_seen_model != msg.model:
+                        self._last_seen_model = msg.model
+                        try:
+                            await update_session_model(self.thread_id, msg.model)
+                        except Exception:
+                            pass
+
+                # Feed usage/model data to status updater
+                msg_usage = getattr(msg, "usage", None)
+                if msg_usage:
+                    logger.debug(
+                        "AssistantMessage usage thread=%d: %s", self.thread_id, msg_usage
+                    )
+                if self._status:
+                    self._status.track_usage(
+                        usage=msg_usage,
+                        model=getattr(msg, "model", None),
+                    )
+
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text:
                         # STAT-03, STAT-04: Split long messages at code block boundaries
                         parts = split_message(block.text)
                         for part in parts:
+                            # Reply to the user's original message on first text chunk
+                            reply_to = None
+                            if not first_text_sent and self._current_reply_to:
+                                reply_to = self._current_reply_to
+                                first_text_sent = True
+
                             try:
                                 await self._bot.send_message(
                                     chat_id=self._chat_id,
                                     message_thread_id=self.thread_id,
                                     text=part,
                                     parse_mode="Markdown",
+                                    reply_to_message_id=reply_to,
                                 )
                             except TelegramRetryAfter as e:
                                 await asyncio.sleep(e.retry_after)
@@ -223,6 +503,7 @@ class SessionRunner:
                                     message_thread_id=self.thread_id,
                                     text=part,
                                     parse_mode="Markdown",
+                                    reply_to_message_id=reply_to,
                                 )
                             except Exception:
                                 # Markdown parse failed — retry without parse_mode
@@ -230,18 +511,84 @@ class SessionRunner:
                                     chat_id=self._chat_id,
                                     message_thread_id=self.thread_id,
                                     text=part,
+                                    reply_to_message_id=reply_to,
                                 )
                     elif isinstance(block, ToolUseBlock):
-                        # STAT-02: Track tool usage for status display
+                        # STAT-02: Track tool usage for status display with input details
                         tool_count += 1
                         if self._status:
-                            self._status.track_tool(block.name)
+                            self._status.track_tool(block.name, block.input if hasattr(block, "input") else None)
+
+            elif isinstance(msg, TaskProgressMessage):
+                # Sub-agent progress — update status silently
+                if self._status:
+                    last_tool = getattr(msg, "last_tool_name", None)
+                    usage = getattr(msg, "usage", None)
+                    if last_tool:
+                        tools_n = usage.get("tool_uses", 0) if usage else 0
+                        self._status.track_tool(f"Agent/{last_tool}", {"description": f"sub-agent ({tools_n} tools)"})
+
+            elif isinstance(msg, TaskStartedMessage):
+                desc = getattr(msg, "description", "")
+                logger.info("Sub-agent started in thread %d: %s", self.thread_id, desc)
+
+            elif isinstance(msg, TaskNotificationMessage):
+                status = getattr(msg, "status", "")
+                summary = getattr(msg, "summary", "")
+                if status == "failed":
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=f"⚠️ Sub-agent failed: {summary[:200]}",
+                        )
+                    except Exception:
+                        pass
+                logger.info("Sub-agent %s in thread %d: %s", status, self.thread_id, summary[:100])
+
+            elif isinstance(msg, RateLimitEvent):
+                info = msg.rate_limit_info
+                if info.status == "rejected":
+                    resets = ""
+                    if info.resets_at:
+                        import datetime
+                        dt = datetime.datetime.fromtimestamp(info.resets_at / 1000)
+                        resets = f" Resets at {dt.strftime('%H:%M')}"
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=f"🚫 Rate limited!{resets}",
+                        )
+                    except Exception:
+                        pass
+                elif info.status == "allowed_warning" and info.utilization:
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=f"⚠️ Rate limit: {info.utilization * 100:.0f}% used",
+                        )
+                    except Exception:
+                        pass
+
+            elif isinstance(msg, SystemMessage):
+                # Handle system events (compact, etc.) and notify user
+                await self._handle_system_message(msg)
 
             elif isinstance(msg, ResultMessage):
                 # Persist session_id on first result
                 if self.session_id is None and msg.session_id:
                     self.session_id = msg.session_id
                     await update_session_id(self.thread_id, msg.session_id)
+
+                # Feed final usage to status before finalizing
+                if hasattr(msg, "usage") and msg.usage:
+                    logger.debug(
+                        "ResultMessage usage thread=%d: %s", self.thread_id, msg.usage
+                    )
+                if self._status and hasattr(msg, "usage") and msg.usage:
+                    self._status.track_usage(usage=msg.usage)
 
                 # STAT-06: Finalize status with cost/duration summary
                 if self._status:
@@ -273,24 +620,35 @@ class SessionRunner:
                     tool_count,
                 )
 
-    async def enqueue(self, text: str) -> None:
-        """Queue a user message. Waits naturally if runner is already RUNNING."""
-        await self._message_queue.put(text)
+    async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
+        """Queue a user message with optional reply tracking.
+
+        If session is RUNNING, the _inject_loop will pick it up and inject mid-turn
+        via client.query() — no waiting for the turn to finish.
+        """
+        await self._message_queue.put(_QueueItem(text=text, reply_to_message_id=reply_to_message_id))
 
     async def stop(self) -> None:
         """Interrupt the running turn (if any) and stop the runner."""
         prev_state = self.state
         self.state = SessionState.INTERRUPTING
         if self._client and prev_state == SessionState.RUNNING:
-            await self._client.interrupt()
-            # Current _drain_response will complete and the loop checks state
-        await self._message_queue.put(None)  # sentinel to unblock queue.get()
-        await update_session_state(self.thread_id, "stopped")
+            try:
+                await self._client.interrupt()
+            except Exception as e:
+                logger.warning("Failed to interrupt client for thread %d: %s", self.thread_id, e)
+        await self._message_queue.put(_QueueItem(text=None))  # sentinel to unblock queue.get()
+        try:
+            await update_session_state(self.thread_id, "stopped")
+        except Exception:
+            pass
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=10.0)
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._task.cancel()
+            except Exception as e:
+                logger.warning("Error waiting for task %d: %s", self.thread_id, e)
 
     @property
     def is_alive(self) -> bool:
