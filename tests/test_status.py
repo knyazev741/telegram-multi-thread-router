@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -53,18 +54,19 @@ async def test_start_turn_sends_message():
 
 @pytest.mark.asyncio
 async def test_stop_cancels_refresh():
-    """After stop(), the internal _update_task is done/cancelled."""
+    """stop() cancels any pending edit and clears the tracked message id."""
     bot = _make_bot()
     updater = StatusUpdater(bot=bot, chat_id=100, thread_id=5)
     await updater.start_turn()
 
-    task = updater._update_task
-    assert task is not None
+    updater._last_edit_time = time.monotonic()
+    updater.track_tool("Read")
+    assert updater._pending_edit is not None
 
     await updater.stop()
 
-    assert task.done()
-    assert updater._update_task is None
+    assert updater._pending_edit is None
+    assert updater._message_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -103,13 +105,9 @@ async def test_finalize_edits_summary():
     updater = StatusUpdater(bot=bot, chat_id=100, thread_id=5)
     await updater.start_turn()
 
-    task = updater._update_task
-
     await updater.finalize(cost_usd=0.0123, duration_ms=5000, tool_count=3)
 
-    # Refresh task should be cancelled/done after finalize
-    assert task.done()
-    assert updater._update_task is None
+    assert updater._pending_edit is None
 
     # edit_message_text should have been called
     bot.edit_message_text.assert_called_once()
@@ -120,6 +118,23 @@ async def test_finalize_edits_summary():
     assert "$0.0123" in edit_text
     assert "5.0s" in edit_text
     assert "3" in edit_text  # tool count appears somewhere in the text
+
+
+@pytest.mark.asyncio
+async def test_watchdog_notice_edits_status_softly():
+    """Watchdog updates the status message instead of sending a separate stall message."""
+    bot = _make_bot(message_id=42)
+    updater = StatusUpdater(bot=bot, chat_id=100, thread_id=5)
+    await updater.start_turn()
+
+    updater.track_tool("Bash", {"command": "sleep 600"})
+    await updater.show_watchdog_notice(180)
+
+    edit_kwargs = bot.edit_message_text.call_args.kwargs
+    edit_text = edit_kwargs["text"]
+    assert "No updates for 3m" in edit_text
+    assert "Long-running tools can be quiet" in edit_text
+    assert "Bash" in edit_text
 
 
 # ---------------------------------------------------------------------------
