@@ -254,14 +254,16 @@ async def _handle_worker(
                 _request_id, future = permission_manager.create_request()
                 perm_text = format_permission_message(msg.tool_name, msg.input_data)
                 keyboard = build_permission_keyboard(_request_id)
+                perm_msg_id = None
                 try:
-                    await bot.send_message(
+                    perm_sent = await bot.send_message(
                         chat_id=settings.chat_id,
                         message_thread_id=msg.topic_id,
                         text=perm_text,
                         parse_mode="HTML",
                         reply_markup=keyboard,
                     )
+                    perm_msg_id = perm_sent.message_id
                 except Exception as e:
                     logger.error(
                         "Failed to send permission request to topic %d: %s",
@@ -273,19 +275,49 @@ async def _handle_worker(
                     perm_future: asyncio.Future,
                     w_id: str,
                     worker_request_id: str,
+                    topic_id: int,
+                    reply_to_msg_id: int | None,
                 ) -> None:
+                    # Send a reminder after 45 seconds if no response
+                    async def _reminder():
+                        await asyncio.sleep(45)
+                        if not perm_future.done():
+                            try:
+                                await bot.send_message(
+                                    chat_id=settings.chat_id,
+                                    message_thread_id=topic_id,
+                                    text="⏳ Waiting for permission... session is paused",
+                                    reply_to_message_id=reply_to_msg_id,
+                                )
+                            except Exception:
+                                pass
+
+                    reminder_task = asyncio.create_task(_reminder())
                     try:
-                        result = await asyncio.wait_for(perm_future, timeout=300.0)
+                        result = await asyncio.wait_for(perm_future, timeout=120.0)
                     except asyncio.TimeoutError:
                         result = "deny"
                         permission_manager.expire(orig_request_id)
+                        try:
+                            await bot.send_message(
+                                chat_id=settings.chat_id,
+                                message_thread_id=topic_id,
+                                text="⏱ Permission timed out (2 min) — denied",
+                            )
+                        except Exception:
+                            pass
+                    finally:
+                        reminder_task.cancel()
                     response = PermissionResponseMsg(
                         request_id=worker_request_id, action=result
                     )
                     await worker_registry.send_to(w_id, response)
 
                 asyncio.create_task(
-                    _await_permission(_request_id, future, worker_id, msg.request_id)
+                    _await_permission(
+                        _request_id, future, worker_id, msg.request_id,
+                        msg.topic_id, perm_msg_id,
+                    )
                 )
 
             elif isinstance(msg, StatusUpdateMsg):

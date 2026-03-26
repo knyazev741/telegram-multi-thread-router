@@ -322,7 +322,7 @@ class SessionRunner:
         self.state = SessionState.WAITING_PERMISSION
 
         request_id, future = self._permission_manager.create_request()
-        await self._bot.send_message(
+        perm_msg = await self._bot.send_message(
             chat_id=self._chat_id,
             message_thread_id=self.thread_id,
             text=format_permission_message(tool_name, input_data),
@@ -331,15 +331,17 @@ class SessionRunner:
         )
 
         try:
-            action = await asyncio.wait_for(future, timeout=300.0)
+            action = await self._wait_permission_with_reminder(
+                future, request_id, perm_msg.message_id,
+            )
         except asyncio.TimeoutError:
             self._permission_manager.expire(request_id)
             await self._bot.send_message(
                 chat_id=self._chat_id,
                 message_thread_id=self.thread_id,
-                text="\u23f1 Permission timed out \u2014 denied",
+                text="\u23f1 Permission timed out (2 min) \u2014 denied",
             )
-            return PermissionResultDeny(message="Timed out \u2014 user did not respond within 5 minutes")
+            return PermissionResultDeny(message="Timed out \u2014 user did not respond within 2 minutes")
         finally:
             self.state = prev_state  # always restore state (Pitfall 4)
 
@@ -361,6 +363,46 @@ class SessionRunner:
             )
         else:  # "deny"
             return PermissionResultDeny(message="Denied by user")
+
+    async def _wait_permission_with_reminder(
+        self,
+        future: asyncio.Future,
+        request_id: str,
+        perm_message_id: int,
+        timeout: float = 120.0,
+        reminder_after: float = 45.0,
+    ) -> str:
+        """Wait for permission response with a reminder nudge.
+
+        After `reminder_after` seconds, replies to the permission message to draw
+        attention. Raises asyncio.TimeoutError if no response within `timeout`.
+        """
+        reminder_sent = False
+
+        async def _send_reminder() -> None:
+            nonlocal reminder_sent
+            await asyncio.sleep(reminder_after)
+            if not future.done():
+                reminder_sent = True
+                try:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text="⏳ Waiting for permission... session is paused",
+                        reply_to_message_id=perm_message_id,
+                    )
+                except Exception:
+                    pass
+
+        reminder_task = asyncio.create_task(_send_reminder())
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        finally:
+            reminder_task.cancel()
+            try:
+                await reminder_task
+            except asyncio.CancelledError:
+                pass
 
     async def _handle_ask_user_question(self, input_data: dict) -> PermissionResultAllow | PermissionResultDeny:
         """Handle AskUserQuestion by showing questions in Telegram and collecting answers.
@@ -456,10 +498,37 @@ class SessionRunner:
         """Receive all messages from the current turn, forwarding text to Telegram with status tracking.
 
         First text message in each turn is sent as a reply to the user's original message.
+        Includes a watchdog: if no SDK message arrives for 3 minutes, notify user.
         """
         tool_count = 0
         first_text_sent = False
-        async for msg in client.receive_response():
+        stall_notified = False
+        watchdog_timeout = 180.0  # 3 minutes
+
+        async def _watchdog_notify() -> None:
+            """Send a stall warning if SDK goes silent for too long."""
+            nonlocal stall_notified
+            while True:
+                await asyncio.sleep(watchdog_timeout)
+                if not stall_notified and self.state == SessionState.RUNNING:
+                    stall_notified = True
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text="⚠️ Session appears stalled (no response for 3 min). "
+                                 "Use /stop to interrupt or send a message to nudge.",
+                        )
+                    except Exception:
+                        pass
+
+        watchdog_task = asyncio.create_task(_watchdog_notify())
+        try:
+            async for msg in client.receive_response():
+                # Reset watchdog on each message by cancelling and restarting
+                watchdog_task.cancel()
+                stall_notified = False
+                watchdog_task = asyncio.create_task(_watchdog_notify())
             if isinstance(msg, AssistantMessage):
                 # Track model silently (no Telegram notification)
                 if hasattr(msg, "model") and msg.model:
@@ -628,6 +697,12 @@ class SessionRunner:
                     msg.duration_ms,
                     tool_count,
                 )
+        finally:
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except asyncio.CancelledError:
+                pass
 
     async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
         """Queue a user message with optional reply tracking.
