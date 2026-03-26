@@ -208,8 +208,8 @@ class StatusUpdater:
 
         # Stats: tool calls + context usage with %
         stats = f"📊 {self._tool_count} tools"
-        if self._input_tokens:
-            total_ctx = self._input_tokens + self._output_tokens
+        total_ctx = self._input_tokens + self._cache_read_tokens + self._cache_creation_tokens + self._output_tokens
+        if total_ctx:
             limit = _get_context_limit(self._model)
             pct = total_ctx / limit * 100
             stats += f" · {_format_tokens(total_ctx)} ctx ({pct:.0f}%)"
@@ -272,8 +272,8 @@ class StatusUpdater:
             lines.append(f"💰 {cost_str} | ⏱ {duration_str} | 🔧 {tool_count} tools")
 
             # Context usage with %
-            if self._input_tokens:
-                total_ctx = self._input_tokens + self._output_tokens
+            total_ctx = self._input_tokens + self._cache_read_tokens + self._cache_creation_tokens + self._output_tokens
+            if total_ctx:
                 limit = _get_context_limit(self._model)
                 pct = total_ctx / limit * 100
                 ctx_line = f"📝 {_format_tokens(total_ctx)} ctx ({pct:.0f}%)"
