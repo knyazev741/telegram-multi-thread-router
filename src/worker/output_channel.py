@@ -129,17 +129,27 @@ class WorkerOutputChannel:
     ) -> None:
         """Send a file to the topic (used by MCP send_file tool).
 
-        `document` may be an aiogram FSInputFile — extract .path if so.
+        Reads the file content and sends it over TCP so the bot can forward
+        it to Telegram even though the file is on the worker's filesystem.
         """
+        from pathlib import Path
+
         # Handle FSInputFile and plain path strings
         if hasattr(document, "path"):
             file_path = str(document.path)
         else:
             file_path = str(document)
+
+        p = Path(file_path)
+        file_data = p.read_bytes()
+        file_name = p.name
+
         await self._send(
             McpSendFileMsg(
                 topic_id=message_thread_id or 0,
                 file_path=file_path,
+                file_name=file_name,
+                file_data=file_data,
                 caption=caption,
             )
         )

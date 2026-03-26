@@ -122,6 +122,8 @@ class McpSendFileMsg(msgspec.Struct, tag="mcp_send_file"):
     """MCP tool: send a file from the worker's filesystem to the topic."""
     topic_id: int
     file_path: str
+    file_name: str
+    file_data: bytes | None = None  # Binary content for remote transfer
     caption: str | None = None
 
 
