@@ -37,6 +37,13 @@ class PermissionRequestMsg(msgspec.Struct, tag="permission_request"):
     input_data: dict
 
 
+class QuestionRequestMsg(msgspec.Struct, tag="question_request"):
+    """Worker asking the bot to show interactive questions to the owner."""
+    topic_id: int
+    request_id: str
+    questions: list[dict]
+
+
 class StatusUpdateMsg(msgspec.Struct, tag="status_update"):
     """Tool execution status update with rich data."""
     topic_id: int
@@ -164,10 +171,28 @@ class PermissionResponseMsg(msgspec.Struct, tag="permission_response"):
     action: str  # "allow" | "always" | "deny"
 
 
+class QuestionResponseMsg(msgspec.Struct, tag="question_response"):
+    """Bot forwards question answers back to the worker."""
+    request_id: str
+    answers: dict[str, str]
+
+
 class SlashCommandMsg(msgspec.Struct, tag="slash_command"):
     """Bot forwards a slash command to the worker."""
     topic_id: int
     command: str
+
+
+# ---- Bidirectional messages ----
+
+class PingMsg(msgspec.Struct, tag="ping"):
+    """Heartbeat ping — sent by worker, answered by bot with PongMsg."""
+    pass
+
+
+class PongMsg(msgspec.Struct, tag="pong"):
+    """Heartbeat pong — bot responds to worker's PingMsg."""
+    pass
 
 
 # ---- Union types for discriminated decoding ----
@@ -177,6 +202,7 @@ WorkerToBot = Union[
     SessionStartedMsg,
     AssistantTextMsg,
     PermissionRequestMsg,
+    QuestionRequestMsg,
     StatusUpdateMsg,
     TurnCompletedMsg,
     UsageUpdateMsg,
@@ -187,6 +213,7 @@ WorkerToBot = Union[
     McpReactMsg,
     McpEditMessageMsg,
     McpSendFileMsg,
+    PingMsg,
 ]
 
 BotToWorker = Union[
@@ -197,7 +224,9 @@ BotToWorker = Union[
     InterruptMsg,
     UserMessageMsg,
     PermissionResponseMsg,
+    QuestionResponseMsg,
     SlashCommandMsg,
+    PongMsg,
 ]
 
 # Module-level encoder/decoders — reuse for performance
