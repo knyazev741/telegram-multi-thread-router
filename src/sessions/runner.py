@@ -152,6 +152,7 @@ class SessionRunner:
         self._current_reply_to: int | None = None  # message_id to reply to for current turn
         self._effort: str | None = None  # Track effort level (updated from SDK system messages)
         self.auto_mode: bool = False  # Auto-approve all permissions (no prompts)
+        self._consecutive_perm_timeouts: int = 0  # Track permission timeout cascade
 
         # Initialize allowed tools from global permissions
         self._allowed_tools.update(self._permission_manager.get_global_allowed())
@@ -201,6 +202,7 @@ class SessionRunner:
                         break
                     self.state = SessionState.RUNNING
                     self._current_reply_to = item.reply_to_message_id
+                    self._consecutive_perm_timeouts = 0  # Reset per turn
                     # Create per-turn UX helpers with session metadata
                     self._status = StatusUpdater(
                         self._bot, self._chat_id, self.thread_id,
@@ -336,6 +338,25 @@ class SessionRunner:
             )
         except asyncio.TimeoutError:
             self._permission_manager.expire(request_id)
+            self._consecutive_perm_timeouts += 1
+
+            if self._consecutive_perm_timeouts >= 2:
+                # Abort the turn — prevent cascade of stale responses
+                await self._bot.send_message(
+                    chat_id=self._chat_id,
+                    message_thread_id=self.thread_id,
+                    text="🛑 2 permissions timed out in a row — aborting turn.\n"
+                         "Send your next message to start fresh.",
+                )
+                self._consecutive_perm_timeouts = 0
+                # Interrupt the SDK turn so _drain_response finishes
+                if self._client:
+                    try:
+                        await self._client.interrupt()
+                    except Exception:
+                        pass
+                return PermissionResultDeny(message="Turn aborted — multiple permission timeouts")
+
             await self._bot.send_message(
                 chat_id=self._chat_id,
                 message_thread_id=self.thread_id,
@@ -344,6 +365,9 @@ class SessionRunner:
             return PermissionResultDeny(message="Timed out \u2014 user did not respond within 2 minutes")
         finally:
             self.state = prev_state  # always restore state (Pitfall 4)
+
+        # Permission was answered — reset timeout counter
+        self._consecutive_perm_timeouts = 0
 
         if action == "allow":
             return PermissionResultAllow(updated_input=input_data)
