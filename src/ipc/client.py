@@ -21,6 +21,8 @@ from src.ipc.protocol import (
     InterruptMsg,
     PermissionRequestMsg,
     PermissionResponseMsg,
+    PingMsg,
+    PongMsg,
     RateLimitMsg,
     SessionEndedMsg,
     SessionStartedMsg,
@@ -398,14 +400,33 @@ class WorkerClient:
             logger.error("Unexpected auth response: %r", msg)
             return False
 
+    async def _heartbeat_loop(self) -> None:
+        """Send ping every 30s to keep TCP alive and detect dead connections."""
+        try:
+            while self._running and self._writer and not self._writer.is_closing():
+                await asyncio.sleep(30)
+                try:
+                    await send_msg(self._writer, PingMsg())
+                except Exception:
+                    logger.warning("Heartbeat send failed — connection likely dead")
+                    break
+        except asyncio.CancelledError:
+            pass
+
     async def run(self) -> None:
         assert self._reader is not None and self._writer is not None
 
-        while self._running:
+        heartbeat = asyncio.create_task(self._heartbeat_loop())
+
+        try:
+          while self._running:
             msg = await recv_b2w(self._reader)
             if msg is None:
                 logger.info("Bot disconnected")
                 break
+
+            if isinstance(msg, PongMsg):
+                continue  # Heartbeat response — ignore
 
             if isinstance(msg, StartSessionMsg):
                 logger.info("Starting session: topic=%d cwd=%s", msg.topic_id, msg.cwd)
@@ -446,6 +467,12 @@ class WorkerClient:
 
             else:
                 logger.warning("Unknown message from bot: %r", msg)
+        finally:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
 
     async def shutdown(self) -> None:
         self._running = False

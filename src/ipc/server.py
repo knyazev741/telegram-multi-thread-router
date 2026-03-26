@@ -20,6 +20,10 @@ from src.ipc.protocol import (
     McpSendMessageMsg,
     PermissionRequestMsg,
     PermissionResponseMsg,
+    PingMsg,
+    PongMsg,
+    QuestionRequestMsg,
+    QuestionResponseMsg,
     RateLimitMsg,
     SessionEndedMsg,
     SessionStartedMsg,
@@ -32,6 +36,7 @@ from src.ipc.protocol import (
 )
 from src.bot.output import escape_markdown_html, split_message
 from src.sessions.permissions import build_permission_keyboard, format_permission_message
+from src.sessions.questions import build_question_keyboard, format_question_message
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +81,7 @@ async def start_ipc_server(
     session_manager,
     permission_manager,
     worker_registry: WorkerRegistry,
+    question_manager=None,
 ) -> asyncio.Server:
     """Start the TCP IPC server. Returns the asyncio.Server object."""
 
@@ -92,6 +98,7 @@ async def start_ipc_server(
                 session_manager,
                 permission_manager,
                 worker_registry,
+                question_manager,
             )
         )
 
@@ -147,6 +154,7 @@ async def _handle_worker(
     session_manager,
     permission_manager,
     worker_registry: WorkerRegistry,
+    question_manager,
 ) -> None:
     """Handle a single worker connection: authenticate, then dispatch messages."""
     worker_id: str | None = None
@@ -320,6 +328,74 @@ async def _handle_worker(
                     )
                 )
 
+            elif isinstance(msg, QuestionRequestMsg):
+                if question_manager is None:
+                    await worker_registry.send_to(
+                        worker_id,
+                        QuestionResponseMsg(request_id=msg.request_id, answers={}),
+                    )
+                    continue
+
+                local_request_id, future = question_manager.create_request(msg.questions)
+
+                for i, question in enumerate(msg.questions):
+                    try:
+                        sent = await bot.send_message(
+                            chat_id=settings.chat_id,
+                            message_thread_id=msg.topic_id,
+                            text=format_question_message(question),
+                            parse_mode="HTML",
+                            reply_markup=build_question_keyboard(local_request_id, i, question),
+                        )
+                        question_manager.add_message_id(local_request_id, sent.message_id)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to send question %d to topic %d: %s",
+                            i,
+                            msg.topic_id,
+                            e,
+                        )
+
+                async def _await_questions(
+                    local_id: str,
+                    question_future: asyncio.Future,
+                    w_id: str,
+                    worker_request_id: str,
+                    topic_id: int,
+                ) -> None:
+                    try:
+                        answers = await asyncio.wait_for(question_future, timeout=300.0)
+                    except asyncio.TimeoutError:
+                        question_manager.expire(local_id)
+                        answers = {}
+                        try:
+                            await bot.send_message(
+                                chat_id=settings.chat_id,
+                                message_thread_id=topic_id,
+                                text="⏱ Questions timed out",
+                            )
+                        except Exception:
+                            pass
+                    except asyncio.CancelledError:
+                        answers = {}
+                    await worker_registry.send_to(
+                        w_id,
+                        QuestionResponseMsg(
+                            request_id=worker_request_id,
+                            answers=answers,
+                        ),
+                    )
+
+                asyncio.create_task(
+                    _await_questions(
+                        local_request_id,
+                        future,
+                        worker_id,
+                        msg.request_id,
+                        msg.topic_id,
+                    )
+                )
+
             elif isinstance(msg, StatusUpdateMsg):
                 status = await _get_or_create_status(msg.topic_id)
                 status.track_tool(msg.tool_name, msg.input_data)
@@ -490,6 +566,9 @@ async def _handle_worker(
                     logger.error(
                         "McpSendFile failed for topic %d: %s", msg.topic_id, e
                     )
+
+            elif isinstance(msg, PingMsg):
+                await send_msg(writer, PongMsg())
 
             else:
                 logger.warning("Unknown message type from worker %s: %r", worker_id, msg)
