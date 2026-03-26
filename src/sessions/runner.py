@@ -31,7 +31,6 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 
 from src.sessions.state import SessionState
-from src.sessions.backend import DEFAULT_SESSION_PROVIDER, SessionProvider
 from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
 from src.sessions.questions import QuestionManager, build_question_keyboard, format_question_message
 from src.sessions.mcp_tools import create_telegram_mcp_server
@@ -135,9 +134,7 @@ class SessionRunner:
     ) -> None:
         self.thread_id = thread_id
         self.workdir = str(Path(workdir).expanduser())
-        self.provider: SessionProvider = DEFAULT_SESSION_PROVIDER
         self.session_id = session_id
-        self.backend_session_id = session_id
         self.model = model
         self._bot = bot
         self._chat_id = chat_id
@@ -657,7 +654,6 @@ class SessionRunner:
                 elif isinstance(msg, ResultMessage):
                     if self.session_id is None and msg.session_id:
                         self.session_id = msg.session_id
-                        self.backend_session_id = msg.session_id
                         await update_session_id(self.thread_id, msg.session_id)
 
                     result_usage = getattr(msg, "usage", None)

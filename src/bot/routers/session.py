@@ -10,12 +10,6 @@ from aiogram.enums import ContentType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 
-from src.sessions.backend import (
-    DEFAULT_SESSION_PROVIDER,
-    SUPPORTED_SESSION_PROVIDERS,
-    is_supported_provider,
-    normalize_provider,
-)
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionCallback, PermissionManager
 from src.sessions.questions import QuestionCallback, QuestionManager, build_question_keyboard
@@ -42,40 +36,6 @@ async def _react(message: Message, emoji: str) -> None:
 def _get_runner_or_none(session_manager: SessionManager, thread_id: int):
     """Get runner, return None if missing or stopped."""
     return session_manager.get(thread_id)
-
-
-def _parse_new_command_args(text: str) -> tuple[str, str, str, str] | None:
-    """Parse `/new` arguments preserving legacy positional behavior.
-
-    Supported forms:
-    - /new <name> <workdir>
-    - /new <name> <workdir> <server>
-    - /new <name> <workdir> <server> <provider>
-    - /new <name> <workdir> provider=codex
-    - /new <name> <workdir> server=myhost provider=codex
-    """
-    args = text.split()
-    if len(args) < 3:
-        return None
-
-    name = args[1]
-    workdir = args[2]
-    server_name = "local"
-    provider = DEFAULT_SESSION_PROVIDER
-
-    for extra in args[3:]:
-        if extra.startswith("server="):
-            server_name = extra.split("=", 1)[1] or "local"
-            continue
-        if extra.startswith("provider="):
-            provider = extra.split("=", 1)[1] or DEFAULT_SESSION_PROVIDER
-            continue
-        if extra in SUPPORTED_SESSION_PROVIDERS:
-            provider = extra
-            continue
-        server_name = extra
-
-    return name, workdir, server_name, provider
 
 
 @session_router.callback_query(PermissionCallback.filter())
@@ -186,30 +146,21 @@ async def handle_new(
     permission_manager: PermissionManager,
     worker_registry: WorkerRegistry,
 ) -> None:
-    """Create a new Claude or Codex session with a dedicated forum thread.
+    """Create a new Claude session with a dedicated forum thread.
 
-    Usage: /new <name> <workdir> [server-name] [provider]
+    Usage: /new <name> <workdir> [server-name]
     Works from any thread (including Orchestrator).
     """
     from aiogram.methods import CreateForumTopic
 
-    parsed = _parse_new_command_args(message.text or "")
-    if parsed is None:
-        await message.reply("Usage: /new <name> <workdir> [server-name] [provider]")
+    args = message.text.split(maxsplit=3)
+    if len(args) < 3:
+        await message.reply("Usage: /new <name> <workdir> [server-name]")
         return
 
-    name, workdir, server_name, provider = parsed
-
-    if not is_supported_provider(provider):
-        await message.reply(
-            f"Unknown provider '{provider}'. Supported: {', '.join(SUPPORTED_SESSION_PROVIDERS)}."
-        )
-        return
-    provider = normalize_provider(provider)
-
-    if provider == "codex" and not settings.enable_codex:
-        await message.reply("Codex sessions are disabled. Set ENABLE_CODEX=true to enable them.")
-        return
+    name = args[1]
+    workdir = args[2]
+    server_name = args[3] if len(args) > 3 else "local"
 
     # Validate server connection for remote sessions
     if server_name != "local":
@@ -227,13 +178,7 @@ async def handle_new(
     # Persist to DB
     model = "opus"
     await insert_topic(thread_id, name)
-    await insert_session(
-        thread_id,
-        workdir,
-        model=model,
-        server=server_name,
-        provider=provider,
-    )
+    await insert_session(thread_id, workdir, model=model, server=server_name)
 
     # Start session (local or remote)
     if server_name != "local":
@@ -243,7 +188,6 @@ async def handle_new(
             worker_id=server_name,
             worker_registry=worker_registry,
             model=model,
-            provider=provider,
         )
     else:
         await session_manager.create(
@@ -253,7 +197,6 @@ async def handle_new(
             chat_id=settings.chat_id,
             permission_manager=permission_manager,
             model=model,
-            provider=provider,
         )
 
     await bot.send_message(
@@ -261,7 +204,6 @@ async def handle_new(
         message_thread_id=thread_id,
         text=(
             f"Session <b>{name}</b> started\n"
-            f"Provider: <code>{provider}</code>\n"
             f"Model: <code>{model}</code>\n"
             f"Thread: <code>{thread_id}</code>\n"
             f"Server: {server_name}\n"
@@ -269,10 +211,7 @@ async def handle_new(
         ),
         parse_mode="HTML",
     )
-    await message.reply(
-        f"Session '{name}' created. Thread: <code>{thread_id}</code> · provider: <code>{provider}</code>",
-        parse_mode="HTML",
-    )
+    await message.reply(f"Session '{name}' created. Thread: <code>{thread_id}</code>", parse_mode="HTML")
 
 
 @session_router.message(
@@ -519,12 +458,10 @@ async def handle_list_in_session(
         else:
             server = "local"
             status = ""
-        provider = getattr(runner, "provider", DEFAULT_SESSION_PROVIDER)
         server_info = f"on <i>{server}</i> {status}".strip()
         auto = " 🤖auto" if getattr(runner, "auto_mode", False) else ""
         lines.append(
-            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] "
-            f"<code>{provider}</code> {server_info}{auto}"
+            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}{auto}"
         )
 
     # Also show connected workers
