@@ -43,6 +43,51 @@ async def test_handle_new_missing_args():
     assert "Usage" in msg.reply.call_args[0][0]
 
 
+async def test_handle_new_codex_disabled(monkeypatch):
+    """/new ... codex is rejected when ENABLE_CODEX is false."""
+    from src.ipc.server import WorkerRegistry
+
+    monkeypatch.setattr("src.bot.routers.session.settings.enable_codex", False)
+    msg = _make_message(thread_id=42, text="/new demo /tmp codex")
+    bot = AsyncMock()
+    session_manager = MagicMock(spec=SessionManager)
+    permission_manager = MagicMock()
+    worker_registry = WorkerRegistry()
+
+    await handle_new(msg, bot, session_manager, permission_manager, worker_registry)
+
+    msg.reply.assert_called_once()
+    assert "disabled" in msg.reply.call_args[0][0].lower()
+
+
+async def test_handle_new_codex_provider(monkeypatch):
+    """/new passes provider='codex' into DB and SessionManager when enabled."""
+    from src.ipc.server import WorkerRegistry
+
+    monkeypatch.setattr("src.bot.routers.session.settings.enable_codex", True)
+    monkeypatch.setattr("src.bot.routers.session.settings.chat_id", -100999)
+    insert_topic = AsyncMock()
+    insert_session = AsyncMock()
+    monkeypatch.setattr("src.bot.routers.session.insert_topic", insert_topic)
+    monkeypatch.setattr("src.bot.routers.session.insert_session", insert_session)
+
+    topic = MagicMock(message_thread_id=77)
+    bot = AsyncMock(return_value=topic)
+    bot.send_message = AsyncMock()
+    msg = _make_message(thread_id=42, text="/new demo /tmp local codex")
+    session_manager = MagicMock(spec=SessionManager)
+    session_manager.create = AsyncMock()
+    permission_manager = MagicMock()
+    worker_registry = WorkerRegistry()
+
+    await handle_new(msg, bot, session_manager, permission_manager, worker_registry)
+
+    insert_session.assert_called_once()
+    assert insert_session.call_args.kwargs["provider"] == "codex"
+    session_manager.create.assert_called_once()
+    assert session_manager.create.call_args.kwargs["provider"] == "codex"
+
+
 # ---------------------------------------------------------------------------
 # /list command
 # ---------------------------------------------------------------------------

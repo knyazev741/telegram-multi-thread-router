@@ -125,7 +125,9 @@ async def _resume_worker_sessions(
                 worker_id=worker_id,
                 worker_registry=worker_registry,
                 session_id=row.get("session_id"),
+                backend_session_id=row.get("backend_session_id"),
                 model=row.get("model"),
+                provider=row.get("provider", "claude"),
             )
             if row.get("auto_mode"):
                 remote.auto_mode = True
@@ -181,7 +183,7 @@ async def _handle_worker(
 
         # --- Status trackers for remote sessions ---
         from src.bot.status import StatusUpdater
-        from src.db.queries import update_session_id
+        from src.db.queries import update_backend_session_id, update_session_id
         from aiogram.exceptions import TelegramRetryAfter
 
         _status_updaters: dict[int, StatusUpdater] = {}
@@ -415,6 +417,10 @@ async def _handle_worker(
                 if msg.session_id:
                     try:
                         await update_session_id(msg.topic_id, msg.session_id)
+                    except Exception:
+                        pass
+                    try:
+                        await update_backend_session_id(msg.topic_id, msg.session_id)
                     except Exception:
                         pass
                 logger.info(

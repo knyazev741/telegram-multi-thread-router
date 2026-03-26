@@ -9,6 +9,12 @@ from aiogram.methods import CreateForumTopic
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from src.config import settings
+from src.sessions.backend import (
+    DEFAULT_SESSION_PROVIDER,
+    SUPPORTED_SESSION_PROVIDERS,
+    is_supported_provider,
+    normalize_provider,
+)
 from src.db.queries import insert_session, insert_topic, get_all_active_sessions
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionManager
@@ -19,7 +25,7 @@ ORCHESTRATOR_TOPIC_NAME = "🎯 Orchestrator"
 ORCHESTRATOR_SYSTEM_PROMPT = """You are a full Claude Code session with additional session management capabilities.
 
 You have all standard Claude Code tools (Bash, Read, Write, Edit, Grep, Glob, etc.) plus orchestrator MCP tools:
-- create_session(name, workdir, server): Create a new Claude Code session in a new Telegram thread. Server defaults to "local", or specify a remote worker name.
+- create_session(name, workdir, server, provider): Create a new session in a new Telegram thread. Provider defaults to "claude" and can also be "codex" when enabled. Server defaults to "local", or specify a remote worker name.
 - list_sessions(): List all active sessions with status
 - stop_session(thread_id): Stop a session
 
@@ -33,16 +39,16 @@ WELCOME_MESSAGE = """\
 Claude Code sessions in Telegram — each thread is an isolated workspace.
 
 <b>Commands (work from any thread):</b>
-<code>/new &lt;name&gt; &lt;workdir&gt; [server]</code> — create a new session
+<code>/new &lt;name&gt; &lt;workdir&gt; [server] [provider]</code> — create a new session
 <code>/list</code> — list active sessions
 <code>/restart</code> — restart bot (sessions resume)
 <code>/stop</code> — interrupt current turn
 <code>/close</code> — stop session + delete thread
 
 <b>Input types:</b>
-💬 Text — forwarded to Claude
+💬 Text — forwarded to the active provider
 🎤 Voice — transcribed via Whisper, then forwarded
-📷 Photo / 📎 Files — downloaded to workdir, path sent to Claude
+📷 Photo / 📎 Files — downloaded to workdir, path sent to the provider session
 
 <b>Orchestrator (this thread):</b>
 I can create, manage, and stop sessions for you. Just ask in natural language!
@@ -58,17 +64,35 @@ def create_orchestrator_mcp_server(
 ):
     """Create MCP server with session management tools for the orchestrator."""
 
+    def _default_model_for_provider(provider: str) -> str | None:
+        if provider == "codex":
+            return None
+        return "opus"
+
     @tool(
         "create_session",
-        "Create a new Claude Code session in a new Telegram thread. Returns the thread ID. "
+        "Create a new session in a new Telegram thread. Returns the thread ID. "
+        "Provider defaults to 'claude' and may be 'codex' when enabled. "
         "Model: 'opus' (default), 'sonnet', 'haiku', or full name like 'claude-sonnet-4-6'.",
-        {"name": str, "workdir": str, "server": str, "model": str},
+        {"name": str, "workdir": str, "server": str, "provider": str, "model": str},
     )
     async def create_session(args: dict) -> dict:
         name = args["name"]
         workdir = args["workdir"]
         server_name = args.get("server", "local")
-        model = args.get("model", "opus")
+        raw_provider = args.get("provider", DEFAULT_SESSION_PROVIDER)
+        model = args.get("model")
+
+        if not is_supported_provider(raw_provider):
+            return {"content": [{"type": "text", "text": f"Error: Unsupported provider '{raw_provider}'"}]}
+        provider = normalize_provider(raw_provider)
+        if model in (None, "", "default"):
+            model = _default_model_for_provider(provider)
+        elif provider == "codex" and model == "opus":
+            model = None
+
+        if provider == "codex" and not settings.enable_codex:
+            return {"content": [{"type": "text", "text": "Error: Codex sessions are disabled by config"}]}
 
         try:
             # Validate remote server
@@ -81,7 +105,13 @@ def create_orchestrator_mcp_server(
 
             # Persist
             await insert_topic(thread_id, name)
-            await insert_session(thread_id, workdir, model=model, server=server_name)
+            await insert_session(
+                thread_id,
+                workdir,
+                model=model,
+                server=server_name,
+                provider=provider,
+            )
 
             # Start session
             if server_name != "local":
@@ -91,6 +121,7 @@ def create_orchestrator_mcp_server(
                     worker_id=server_name,
                     worker_registry=worker_registry,
                     model=model,
+                    provider=provider,
                 )
             else:
                 await session_manager.create(
@@ -100,6 +131,7 @@ def create_orchestrator_mcp_server(
                     chat_id=chat_id,
                     permission_manager=permission_manager,
                     model=model,
+                    provider=provider,
                 )
 
             await bot.send_message(
@@ -107,7 +139,8 @@ def create_orchestrator_mcp_server(
                 message_thread_id=thread_id,
                 text=(
                     f"Session <b>{name}</b> started\n"
-                    f"Model: <code>{model}</code>\n"
+                    f"Provider: <code>{provider}</code>\n"
+                    f"Model: <code>{model or 'default'}</code>\n"
                     f"Thread: <code>{thread_id}</code>\n"
                     f"Server: {server_name}\n"
                     f"Workdir: <code>{workdir}</code>"
@@ -115,7 +148,15 @@ def create_orchestrator_mcp_server(
                 parse_mode="HTML",
             )
 
-            return {"content": [{"type": "text", "text": f"Session '{name}' created. Thread ID: {thread_id}, model: {model}, server: {server_name}"}]}
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"Session '{name}' created. Thread ID: {thread_id}, "
+                        f"provider: {provider}, model: {model or 'default'}, server: {server_name}"
+                    ),
+                }]
+            }
         except Exception as e:
             logger.error("create_session error: %s", e)
             return {"content": [{"type": "text", "text": f"Error creating session: {e}"}]}
@@ -135,7 +176,11 @@ def create_orchestrator_mcp_server(
         lines = []
         for thread_id, runner in sessions:
             server = runner.worker_id if isinstance(runner, RemoteSession) else "local"
-            lines.append(f"- Thread {thread_id}: {runner.workdir} [{runner.state.name}] on {server}")
+            provider = getattr(runner, "provider", DEFAULT_SESSION_PROVIDER)
+            lines.append(
+                f"- Thread {thread_id}: {runner.workdir} [{runner.state.name}] "
+                f"provider={provider} on {server}"
+            )
 
         return {"content": [{"type": "text", "text": "\n".join(lines)}]}
 

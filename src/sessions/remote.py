@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.ipc.protocol import StartSessionMsg, StopSessionMsg, UserMessageMsg
+from src.sessions.backend import DEFAULT_SESSION_PROVIDER, SessionProvider, normalize_provider
 from src.sessions.state import SessionState
 
 if TYPE_CHECKING:
@@ -25,13 +26,21 @@ class RemoteSession:
         worker_id: str,
         worker_registry: WorkerRegistry,
         session_id: str | None = None,
+        backend_session_id: str | None = None,
+        provider: str = DEFAULT_SESSION_PROVIDER,
+        model: str | None = None,
+        provider_options: dict | None = None,
     ) -> None:
         self.thread_id = thread_id
         self.workdir = workdir
         self.worker_id = worker_id
+        self.provider: SessionProvider = normalize_provider(provider)
         self.session_id = session_id
+        self.backend_session_id = backend_session_id or session_id
+        self.model = model
         self.state: SessionState = SessionState.IDLE
         self.auto_mode: bool = False
+        self.provider_options = provider_options
         self._registry = worker_registry
 
     @property
@@ -47,6 +56,10 @@ class RemoteSession:
                 topic_id=self.thread_id,
                 cwd=self.workdir,
                 session_id=self.session_id,
+                backend_session_id=self.backend_session_id,
+                model=self.model,
+                provider=self.provider,
+                provider_options=self.provider_options,
             ),
         )
         if not sent:
@@ -62,7 +75,11 @@ class RemoteSession:
         """
         sent = await self._registry.send_to(
             self.worker_id,
-            UserMessageMsg(topic_id=self.thread_id, text=text),
+            UserMessageMsg(
+                topic_id=self.thread_id,
+                text=text,
+                reply_to_message_id=reply_to_message_id,
+            ),
         )
         if not sent:
             raise ConnectionError(

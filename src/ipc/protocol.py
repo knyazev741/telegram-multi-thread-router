@@ -135,7 +135,10 @@ class StartSessionMsg(msgspec.Struct, tag="start_session"):
     topic_id: int
     cwd: str
     session_id: str | None = None
+    backend_session_id: str | None = None
     model: str | None = None
+    provider: str = "claude"
+    provider_options: dict | None = None
 
 
 class StopSessionMsg(msgspec.Struct, tag="stop_session"):

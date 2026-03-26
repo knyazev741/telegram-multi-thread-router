@@ -20,8 +20,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     thread_id   INTEGER NOT NULL REFERENCES topics(thread_id),
     session_id  TEXT,
+    backend_session_id TEXT,
     workdir     TEXT    NOT NULL,
     server      TEXT    NOT NULL DEFAULT 'local',
+    provider    TEXT    NOT NULL DEFAULT 'claude',
     state       TEXT    NOT NULL DEFAULT 'idle',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -71,11 +73,26 @@ async def init_db(db_path: Path | None = None) -> None:
             "ALTER TABLE sessions ADD COLUMN model TEXT",
             "ALTER TABLE topics ADD COLUMN is_orchestrator INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
+            "ALTER TABLE sessions ADD COLUMN backend_session_id TEXT",
         ]:
             try:
                 await conn.execute(migration)
             except Exception:
                 pass  # Column already exists
+        try:
+            await conn.execute(
+                "UPDATE sessions SET provider='claude' WHERE provider IS NULL OR provider=''"
+            )
+        except Exception:
+            pass
+        try:
+            await conn.execute(
+                "UPDATE sessions SET backend_session_id=session_id "
+                "WHERE backend_session_id IS NULL AND session_id IS NOT NULL"
+            )
+        except Exception:
+            pass
         await conn.commit()
 
     logger.info("Database initialized at %s (WAL mode)", path)

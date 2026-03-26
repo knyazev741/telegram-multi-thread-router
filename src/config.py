@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     auth_token: str
     ipc_host: str = "0.0.0.0"
     ipc_port: int = 9800
+    enable_codex: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

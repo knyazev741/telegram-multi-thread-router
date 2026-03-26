@@ -1,6 +1,7 @@
 """Named SQL query functions for session and topic CRUD."""
 
 from src.db.connection import get_connection
+from src.sessions.backend import DEFAULT_SESSION_PROVIDER, normalize_provider
 
 
 async def insert_topic(thread_id: int, name: str, is_orchestrator: bool = False) -> None:
@@ -23,12 +24,21 @@ async def get_orchestrator_topic() -> dict | None:
         return dict(row) if row else None
 
 
-async def insert_session(thread_id: int, workdir: str, model: str | None = None, server: str = "local") -> None:
+async def insert_session(
+    thread_id: int,
+    workdir: str,
+    model: str | None = None,
+    server: str = "local",
+    provider: str = DEFAULT_SESSION_PROVIDER,
+    backend_session_id: str | None = None,
+) -> None:
     """Insert a new session record with state='idle'."""
+    provider = normalize_provider(provider)
     async with get_connection() as conn:
         await conn.execute(
-            "INSERT INTO sessions (thread_id, workdir, model, state, server) VALUES (?, ?, ?, 'idle', ?)",
-            (thread_id, workdir, model, server),
+            "INSERT INTO sessions (thread_id, workdir, model, state, server, provider, backend_session_id) "
+            "VALUES (?, ?, ?, 'idle', ?, ?, ?)",
+            (thread_id, workdir, model, server, provider, backend_session_id),
         )
         await conn.commit()
 
@@ -37,8 +47,19 @@ async def update_session_id(thread_id: int, session_id: str) -> None:
     """Update the Claude session_id for a thread after first ResultMessage."""
     async with get_connection() as conn:
         await conn.execute(
-            "UPDATE sessions SET session_id=?, updated_at=datetime('now') WHERE thread_id=?",
-            (session_id, thread_id),
+            "UPDATE sessions SET session_id=?, backend_session_id=?, updated_at=datetime('now') "
+            "WHERE thread_id=?",
+            (session_id, session_id, thread_id),
+        )
+        await conn.commit()
+
+
+async def update_backend_session_id(thread_id: int, backend_session_id: str) -> None:
+    """Update the provider-specific backend session identifier for a thread."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "UPDATE sessions SET backend_session_id=?, updated_at=datetime('now') WHERE thread_id=?",
+            (backend_session_id, thread_id),
         )
         await conn.commit()
 
@@ -56,10 +77,23 @@ async def update_session_state(thread_id: int, state: str) -> None:
 async def get_resumable_sessions() -> list[dict]:
     """Return all local sessions that were running or idle and have a session_id."""
     async with get_connection() as conn:
-        cursor = await conn.execute(
-            "SELECT thread_id, session_id, workdir, model, state, server, auto_mode FROM sessions "
-            "WHERE state IN ('running', 'idle') AND session_id IS NOT NULL"
-        )
+        try:
+            cursor = await conn.execute(
+                "SELECT thread_id, session_id, backend_session_id, workdir, model, state, server, "
+                "provider, auto_mode FROM sessions "
+                "WHERE state IN ('running', 'idle') AND ("
+                "(provider='claude' AND session_id IS NOT NULL) OR "
+                "(provider!='claude' AND backend_session_id IS NOT NULL)"
+                ")"
+            )
+        except Exception as e:
+            if "no such column" not in str(e).lower():
+                raise
+            cursor = await conn.execute(
+                "SELECT thread_id, session_id, session_id AS backend_session_id, workdir, "
+                "NULL AS model, state, server, 'claude' AS provider, 0 AS auto_mode FROM sessions "
+                "WHERE state IN ('running', 'idle') AND session_id IS NOT NULL"
+            )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -67,11 +101,22 @@ async def get_resumable_sessions() -> list[dict]:
 async def get_worker_sessions(worker_id: str) -> list[dict]:
     """Return all idle/running sessions for a specific remote worker (session_id not required)."""
     async with get_connection() as conn:
-        cursor = await conn.execute(
-            "SELECT thread_id, session_id, workdir, model, state, server, auto_mode FROM sessions "
-            "WHERE state IN ('running', 'idle') AND server=?",
-            (worker_id,),
-        )
+        try:
+            cursor = await conn.execute(
+                "SELECT thread_id, session_id, backend_session_id, workdir, model, state, server, "
+                "provider, auto_mode FROM sessions "
+                "WHERE state IN ('running', 'idle') AND server=?",
+                (worker_id,),
+            )
+        except Exception as e:
+            if "no such column" not in str(e).lower():
+                raise
+            cursor = await conn.execute(
+                "SELECT thread_id, session_id, session_id AS backend_session_id, workdir, "
+                "NULL AS model, state, server, 'claude' AS provider, 0 AS auto_mode FROM sessions "
+                "WHERE state IN ('running', 'idle') AND server=?",
+                (worker_id,),
+            )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -118,12 +163,24 @@ async def update_session_model(thread_id: int, model: str) -> None:
 async def get_all_active_sessions() -> list[dict]:
     """Return all sessions in idle or running state, joined with topic name."""
     async with get_connection() as conn:
-        cursor = await conn.execute(
-            "SELECT s.id, s.thread_id, s.session_id, s.workdir, s.model, s.state, s.server, "
-            "s.created_at, s.updated_at, t.name FROM sessions s "
-            "JOIN topics t ON s.thread_id=t.thread_id "
-            "WHERE s.state IN ('idle', 'running')"
-        )
+        try:
+            cursor = await conn.execute(
+                "SELECT s.id, s.thread_id, s.session_id, s.backend_session_id, s.provider, "
+                "s.workdir, s.model, s.state, s.server, "
+                "s.created_at, s.updated_at, t.name FROM sessions s "
+                "JOIN topics t ON s.thread_id=t.thread_id "
+                "WHERE s.state IN ('idle', 'running')"
+            )
+        except Exception as e:
+            if "no such column" not in str(e).lower():
+                raise
+            cursor = await conn.execute(
+                "SELECT s.id, s.thread_id, s.session_id, s.session_id AS backend_session_id, "
+                "'claude' AS provider, s.workdir, NULL AS model, s.state, s.server, "
+                "s.created_at, s.updated_at, t.name FROM sessions s "
+                "JOIN topics t ON s.thread_id=t.thread_id "
+                "WHERE s.state IN ('idle', 'running')"
+            )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 

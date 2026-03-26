@@ -59,6 +59,13 @@ BOT_TO_WORKER_MESSAGES = [
     AuthFailMsg(reason="bad token"),
     StartSessionMsg(topic_id=1, cwd="/tmp"),
     StartSessionMsg(topic_id=2, cwd="/tmp", session_id="sid", model="claude-3"),
+    StartSessionMsg(
+        topic_id=6,
+        cwd="/tmp",
+        backend_session_id="thread-123",
+        provider="codex",
+        provider_options={"sandbox": "workspace-write"},
+    ),
     StopSessionMsg(topic_id=3),
     UserMessageMsg(topic_id=4, text="hello"),
     PermissionResponseMsg(request_id="r1", action="allow"),

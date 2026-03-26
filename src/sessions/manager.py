@@ -6,6 +6,13 @@ from typing import Optional
 
 from aiogram import Bot
 
+from src.sessions.backend import (
+    DEFAULT_SESSION_PROVIDER,
+    SessionBackend,
+    SessionProvider,
+    normalize_provider,
+)
+from src.sessions.codex_runner import CodexRunner
 from src.sessions.permissions import PermissionManager
 from src.sessions.questions import QuestionManager
 from src.sessions.remote import RemoteSession
@@ -18,7 +25,7 @@ class SessionManager:
     """Manages the lifecycle of all active SessionRunner and RemoteSession instances."""
 
     def __init__(self, question_manager: QuestionManager | None = None) -> None:
-        self._sessions: dict[int, SessionRunner | RemoteSession] = {}
+        self._sessions: dict[int, SessionBackend] = {}
         self._lock = asyncio.Lock()
         self._question_manager = question_manager
 
@@ -30,25 +37,39 @@ class SessionManager:
         chat_id: int,
         permission_manager: PermissionManager,
         session_id: str | None = None,
+        backend_session_id: str | None = None,
         model: str | None = None,
-    ) -> SessionRunner:
+        provider: str = DEFAULT_SESSION_PROVIDER,
+    ) -> SessionBackend:
         """Create and start a new SessionRunner for the given thread_id.
 
         Raises ValueError if a session for that thread already exists.
         """
+        normalized_provider = normalize_provider(provider)
         async with self._lock:
             if thread_id in self._sessions:
                 raise ValueError(f"Session for topic {thread_id} already exists")
-            runner = SessionRunner(
-                thread_id=thread_id,
-                workdir=workdir,
-                bot=bot,
-                chat_id=chat_id,
-                permission_manager=permission_manager,
-                question_manager=self._question_manager,
-                session_id=session_id,
-                model=model,
-            )
+            runner: SessionBackend
+            if normalized_provider == "codex":
+                runner = CodexRunner(
+                    thread_id=thread_id,
+                    workdir=workdir,
+                    bot=bot,
+                    chat_id=chat_id,
+                    backend_session_id=backend_session_id,
+                    model=model,
+                )
+            else:
+                runner = SessionRunner(
+                    thread_id=thread_id,
+                    workdir=workdir,
+                    bot=bot,
+                    chat_id=chat_id,
+                    permission_manager=permission_manager,
+                    question_manager=self._question_manager,
+                    session_id=session_id or backend_session_id,
+                    model=model,
+                )
             self._sessions[thread_id] = runner
             await runner.start()
             return runner
@@ -60,7 +81,10 @@ class SessionManager:
         worker_id: str,
         worker_registry,
         session_id: str | None = None,
+        backend_session_id: str | None = None,
         model: str | None = None,
+        provider: str = DEFAULT_SESSION_PROVIDER,
+        provider_options: dict | None = None,
     ) -> RemoteSession:
         """Create a RemoteSession proxy and send StartSessionMsg to the worker.
 
@@ -75,12 +99,16 @@ class SessionManager:
                 worker_id=worker_id,
                 worker_registry=worker_registry,
                 session_id=session_id,
+                backend_session_id=backend_session_id,
+                provider=provider,
+                model=model,
+                provider_options=provider_options,
             )
             self._sessions[thread_id] = session
             await session.start()
             return session
 
-    def get(self, thread_id: int) -> Optional[SessionRunner | RemoteSession]:
+    def get(self, thread_id: int) -> Optional[SessionBackend]:
         """Return the runner/session for thread_id, or None if not found."""
         return self._sessions.get(thread_id)
 
@@ -91,7 +119,7 @@ class SessionManager:
             if runner:
                 await runner.stop()
 
-    def list_all(self) -> list[tuple[int, SessionRunner | RemoteSession]]:
+    def list_all(self) -> list[tuple[int, SessionBackend]]:
         """Return all (thread_id, runner) pairs."""
         return list(self._sessions.items())
 
@@ -121,14 +149,19 @@ class SessionManager:
         for row in rows:
             thread_id = row["thread_id"]
             session_id = row["session_id"]
+            backend_session_id = row.get("backend_session_id")
             workdir = row["workdir"]
             model = row.get("model")
             server = row.get("server", "local")
+            provider = normalize_provider(row.get("provider"))
 
             # Skip remote sessions — worker reconnect handles re-registration
             if server != "local":
                 logger.info(
-                    "Skipping remote session topic %d (server=%s) on resume", thread_id, server
+                    "Skipping remote session topic %d (server=%s provider=%s) on resume",
+                    thread_id,
+                    server,
+                    provider,
                 )
                 continue
 
@@ -145,7 +178,9 @@ class SessionManager:
                     chat_id=chat_id,
                     permission_manager=permission_manager,
                     session_id=session_id,
+                    backend_session_id=backend_session_id,
                     model=model,
+                    provider=provider,
                 )
                 # Restore auto_mode from DB
                 if row.get("auto_mode"):

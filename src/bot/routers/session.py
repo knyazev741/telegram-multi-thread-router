@@ -78,6 +78,13 @@ def _parse_new_command_args(text: str) -> tuple[str, str, str, str] | None:
     return name, workdir, server_name, provider
 
 
+def _default_model_for_provider(provider: str) -> str | None:
+    """Return the default model to persist/use for a provider."""
+    if provider == "codex":
+        return None
+    return "opus"
+
+
 @session_router.callback_query(PermissionCallback.filter())
 async def handle_permission_callback(
     query: CallbackQuery,
@@ -225,7 +232,7 @@ async def handle_new(
     thread_id = topic.message_thread_id
 
     # Persist to DB
-    model = "opus"
+    model = _default_model_for_provider(provider)
     await insert_topic(thread_id, name)
     await insert_session(
         thread_id,
@@ -262,7 +269,7 @@ async def handle_new(
         text=(
             f"Session <b>{name}</b> started\n"
             f"Provider: <code>{provider}</code>\n"
-            f"Model: <code>{model}</code>\n"
+            f"Model: <code>{model or 'default'}</code>\n"
             f"Thread: <code>{thread_id}</code>\n"
             f"Server: {server_name}\n"
             f"Workdir: <code>{workdir}</code>"

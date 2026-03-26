@@ -30,6 +30,7 @@ from src.sessions.runner import SessionRunner
 from src.sessions.permissions import PermissionManager
 from src.sessions.state import SessionState
 from src.worker.output_channel import WorkerOutputChannel
+from src.sessions.backend import normalize_provider
 
 if TYPE_CHECKING:
     pass
@@ -170,6 +171,7 @@ class WorkerClient:
     async def _start_session(self, msg: StartSessionMsg) -> None:
         """Create and start a new SessionRunner for the given topic."""
         topic_id = msg.topic_id
+        provider = normalize_provider(getattr(msg, "provider", "claude"))
 
         if topic_id in self._sessions:
             runner = self._sessions[topic_id]
@@ -189,6 +191,20 @@ class WorkerClient:
             )
             return
 
+        if provider != "claude":
+            logger.error(
+                "Worker %s: provider %s is not supported by the Python worker",
+                self._worker_id,
+                provider,
+            )
+            await self._output_channel._send(
+                SessionEndedMsg(
+                    topic_id=topic_id,
+                    error=f"Provider '{provider}' is not supported by worker '{self._worker_id}'",
+                )
+            )
+            return
+
         perm_mgr = PermissionManager()
 
         runner = SessionRunner(
@@ -197,7 +213,7 @@ class WorkerClient:
             bot=self._output_channel,
             chat_id=0,  # unused on worker side
             permission_manager=perm_mgr,
-            session_id=msg.session_id,
+            session_id=msg.session_id or msg.backend_session_id,
             model=msg.model,
         )
 
