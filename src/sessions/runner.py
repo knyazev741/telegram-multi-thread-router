@@ -513,22 +513,37 @@ class SessionRunner:
         """
         tool_count = 0
         first_text_sent = False
-        stall_notified = False
-        watchdog_timeout = 180.0  # 3 minutes
+        soft_watchdog_notified = False
+        hard_watchdog_notified = False
+        soft_watchdog_timeout = 180.0  # 3 minutes
+        hard_watchdog_timeout = 600.0  # 10 minutes
 
         async def _watchdog_notify() -> None:
-            """Send a stall warning if SDK goes silent for too long."""
-            nonlocal stall_notified
+            """Escalate from a soft status note to a hard warning if silence persists."""
+            nonlocal soft_watchdog_notified, hard_watchdog_notified
             while True:
-                await asyncio.sleep(watchdog_timeout)
-                if not stall_notified and self.state == SessionState.RUNNING:
-                    stall_notified = True
+                timeout = soft_watchdog_timeout if not soft_watchdog_notified else hard_watchdog_timeout - soft_watchdog_timeout
+                await asyncio.sleep(timeout)
+                if self.state != SessionState.RUNNING:
+                    continue
+
+                if not soft_watchdog_notified:
+                    soft_watchdog_notified = True
+                    if self._status:
+                        try:
+                            await self._status.show_watchdog_notice(int(soft_watchdog_timeout))
+                        except Exception:
+                            pass
+                    continue
+
+                if not hard_watchdog_notified:
+                    hard_watchdog_notified = True
                     try:
                         await self._bot.send_message(
                             chat_id=self._chat_id,
                             message_thread_id=self.thread_id,
-                            text="⚠️ Session appears stalled (no response for 3 min). "
-                                 "Use /stop to interrupt or send a message to nudge.",
+                            text="⚠️ No SDK updates for 10 min. The task may be stuck. "
+                                 "Use /stop only if you want to interrupt it.",
                         )
                     except Exception:
                         pass
@@ -538,7 +553,10 @@ class SessionRunner:
             async for msg in client.receive_response():
                 # Reset watchdog on each message by cancelling and restarting
                 watchdog_task.cancel()
-                stall_notified = False
+                soft_watchdog_notified = False
+                hard_watchdog_notified = False
+                if self._status:
+                    self._status.clear_watchdog_notice()
                 watchdog_task = asyncio.create_task(_watchdog_notify())
 
                 if isinstance(msg, AssistantMessage):
