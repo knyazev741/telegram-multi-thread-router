@@ -14,10 +14,20 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 logger = logging.getLogger(__name__)
 
-# Default tools that are always auto-approved (safe, read-only or well-sandboxed)
+# Default tools that are always auto-approved.
+#
+# Keep this list strictly read-only / discovery-only. Any tool that can mutate
+# files, run commands, send external messages, or otherwise cause side effects
+# should require an explicit approval unless the user enables auto-mode.
 DEFAULT_ALLOWED_TOOLS: set[str] = {
-    "Read", "Glob", "Grep", "Agent", "Bash", "Edit", "Write",
-    "Skill", "ToolSearch", "WebFetch", "WebSearch", "NotebookEdit",
+    "Read",
+    "Glob",
+    "Grep",
+    "Agent",
+    "Skill",
+    "ToolSearch",
+    "WebFetch",
+    "WebSearch",
 }
 
 
