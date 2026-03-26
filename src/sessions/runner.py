@@ -31,6 +31,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 
 from src.sessions.state import SessionState
+from src.sessions.backend import DEFAULT_SESSION_PROVIDER, SessionProvider
 from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
 from src.sessions.questions import QuestionManager, build_question_keyboard, format_question_message
 from src.sessions.mcp_tools import create_telegram_mcp_server
@@ -46,6 +47,7 @@ class _QueueItem:
     """A queued user message with optional reply tracking."""
     text: str | None  # None = stop sentinel
     reply_to_message_id: int | None = None
+    content_blocks: list | None = None  # For image messages: list of Anthropic content blocks
 
 
 async def _dummy_pretool_hook(input_data, tool_use_id, context):
@@ -133,7 +135,9 @@ class SessionRunner:
     ) -> None:
         self.thread_id = thread_id
         self.workdir = str(Path(workdir).expanduser())
+        self.provider: SessionProvider = DEFAULT_SESSION_PROVIDER
         self.session_id = session_id
+        self.backend_session_id = session_id
         self.model = model
         self._bot = bot
         self._chat_id = chat_id
@@ -198,7 +202,7 @@ class SessionRunner:
 
                 while self.state != SessionState.STOPPED:
                     item = await self._message_queue.get()
-                    if item.text is None:  # stop sentinel
+                    if item.text is None and item.content_blocks is None:  # stop sentinel
                         break
                     self.state = SessionState.RUNNING
                     self._current_reply_to = item.reply_to_message_id
@@ -212,7 +216,7 @@ class SessionRunner:
                     self._typing = TypingIndicator(self._bot, self._chat_id, self.thread_id)
                     await self._status.start_turn()
                     await self._typing.start()
-                    await client.query(item.text)
+                    await self._send_query(client, item)
                     await self._drain_response(client)
                     # Stop typing indicator (status finalized inside _drain_response on ResultMessage)
                     if self._typing:
@@ -275,7 +279,7 @@ class SessionRunner:
                     await asyncio.sleep(0.1)
                     continue
 
-                if item.text is None:
+                if item.text is None and item.content_blocks is None:
                     # Stop sentinel — put it back for the main loop
                     await self._message_queue.put(item)
                     break
@@ -283,7 +287,7 @@ class SessionRunner:
                 # Inject mid-turn
                 logger.info("Injecting mid-turn message in thread %d", self.thread_id)
                 self._current_reply_to = item.reply_to_message_id
-                await client.query(item.text)
+                await self._send_query(client, item)
         except asyncio.CancelledError:
             pass
 
@@ -653,6 +657,7 @@ class SessionRunner:
                 elif isinstance(msg, ResultMessage):
                     if self.session_id is None and msg.session_id:
                         self.session_id = msg.session_id
+                        self.backend_session_id = msg.session_id
                         await update_session_id(self.thread_id, msg.session_id)
 
                     result_usage = getattr(msg, "usage", None)
@@ -689,13 +694,49 @@ class SessionRunner:
             except asyncio.CancelledError:
                 pass
 
-    async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
-        """Queue a user message with optional reply tracking.
+    async def _send_query(self, client: ClaudeSDKClient, item: _QueueItem) -> None:
+        """Send a query to the SDK — text or multimodal (image + text)."""
+        import json
 
-        If session is RUNNING, the _inject_loop will pick it up and inject mid-turn
-        via client.query() — no waiting for the turn to finish.
-        """
+        if item.content_blocks:
+            # Multimodal: send raw message dict with content blocks
+            message = {
+                "type": "user",
+                "message": {"role": "user", "content": item.content_blocks},
+                "parent_tool_use_id": None,
+                "session_id": "default",
+            }
+            await client._transport.write(json.dumps(message) + "\n")
+        else:
+            await client.query(item.text)
+
+    async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
+        """Queue a user message with optional reply tracking."""
         await self._message_queue.put(_QueueItem(text=text, reply_to_message_id=reply_to_message_id))
+
+    async def enqueue_image(
+        self,
+        image_data: bytes,
+        media_type: str = "image/jpeg",
+        caption: str = "",
+        reply_to_message_id: int | None = None,
+    ) -> None:
+        """Queue an image message. Claude sees the image directly (no file path)."""
+        import base64
+
+        b64 = base64.b64encode(image_data).decode()
+        blocks = [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+        ]
+        if caption:
+            blocks.append({"type": "text", "text": caption})
+        else:
+            blocks.append({"type": "text", "text": "User sent a photo. Describe what you see."})
+        await self._message_queue.put(_QueueItem(
+            text=None,
+            reply_to_message_id=reply_to_message_id,
+            content_blocks=blocks,
+        ))
 
     async def interrupt(self) -> bool:
         """Interrupt the current turn (like Escape in CLI). Session stays alive for next message.
