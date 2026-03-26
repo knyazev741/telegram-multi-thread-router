@@ -539,174 +539,149 @@ class SessionRunner:
                 watchdog_task.cancel()
                 stall_notified = False
                 watchdog_task = asyncio.create_task(_watchdog_notify())
-            if isinstance(msg, AssistantMessage):
-                # Track model silently (no Telegram notification)
-                if hasattr(msg, "model") and msg.model:
-                    if self._last_seen_model != msg.model:
-                        self._last_seen_model = msg.model
+
+                if isinstance(msg, AssistantMessage):
+                    # Track model
+                    if hasattr(msg, "model") and msg.model:
+                        if self._last_seen_model != msg.model:
+                            self._last_seen_model = msg.model
+                            try:
+                                await update_session_model(self.thread_id, msg.model)
+                            except Exception:
+                                pass
+
+                    # Feed usage/model data to status updater
+                    msg_usage = getattr(msg, "usage", None)
+                    if self._status:
+                        self._status.track_usage(
+                            usage=msg_usage,
+                            model=getattr(msg, "model", None),
+                        )
+
+                    for block in msg.content:
+                        if isinstance(block, TextBlock) and block.text:
+                            parts = split_message(block.text)
+                            for part in parts:
+                                reply_to = None
+                                if not first_text_sent and self._current_reply_to:
+                                    reply_to = self._current_reply_to
+                                    first_text_sent = True
+                                escaped_part = escape_markdown_html(part)
+                                try:
+                                    await self._bot.send_message(
+                                        chat_id=self._chat_id,
+                                        message_thread_id=self.thread_id,
+                                        text=escaped_part,
+                                        parse_mode="Markdown",
+                                        reply_to_message_id=reply_to,
+                                    )
+                                except TelegramRetryAfter as e:
+                                    await asyncio.sleep(e.retry_after)
+                                    await self._bot.send_message(
+                                        chat_id=self._chat_id,
+                                        message_thread_id=self.thread_id,
+                                        text=escaped_part,
+                                        parse_mode="Markdown",
+                                        reply_to_message_id=reply_to,
+                                    )
+                                except Exception:
+                                    await self._bot.send_message(
+                                        chat_id=self._chat_id,
+                                        message_thread_id=self.thread_id,
+                                        text=part,
+                                        reply_to_message_id=reply_to,
+                                    )
+                        elif isinstance(block, ToolUseBlock):
+                            tool_count += 1
+                            if self._status:
+                                self._status.track_tool(block.name, block.input if hasattr(block, "input") else None)
+
+                elif isinstance(msg, TaskProgressMessage):
+                    if self._status:
+                        last_tool = getattr(msg, "last_tool_name", None)
+                        usage = getattr(msg, "usage", None)
+                        if last_tool:
+                            tools_n = usage.get("tool_uses", 0) if usage else 0
+                            self._status.track_tool(f"Agent/{last_tool}", {"description": f"sub-agent ({tools_n} tools)"})
+
+                elif isinstance(msg, TaskStartedMessage):
+                    logger.info("Sub-agent started in thread %d: %s", self.thread_id, getattr(msg, "description", ""))
+
+                elif isinstance(msg, TaskNotificationMessage):
+                    status = getattr(msg, "status", "")
+                    summary = getattr(msg, "summary", "")
+                    if status == "failed":
                         try:
-                            await update_session_model(self.thread_id, msg.model)
+                            await self._bot.send_message(
+                                chat_id=self._chat_id,
+                                message_thread_id=self.thread_id,
+                                text=f"⚠️ Sub-agent failed: {summary[:200]}",
+                            )
+                        except Exception:
+                            pass
+                    logger.info("Sub-agent %s in thread %d: %s", status, self.thread_id, summary[:100])
+
+                elif isinstance(msg, RateLimitEvent):
+                    info = msg.rate_limit_info
+                    if info.status == "rejected":
+                        resets = ""
+                        if info.resets_at:
+                            import datetime
+                            dt = datetime.datetime.fromtimestamp(info.resets_at / 1000)
+                            resets = f" Resets at {dt.strftime('%H:%M')}"
+                        try:
+                            await self._bot.send_message(
+                                chat_id=self._chat_id,
+                                message_thread_id=self.thread_id,
+                                text=f"🚫 Rate limited!{resets}",
+                            )
+                        except Exception:
+                            pass
+                    elif info.status == "allowed_warning" and info.utilization:
+                        try:
+                            await self._bot.send_message(
+                                chat_id=self._chat_id,
+                                message_thread_id=self.thread_id,
+                                text=f"⚠️ Rate limit: {info.utilization * 100:.0f}% used",
+                            )
                         except Exception:
                             pass
 
-                # Feed usage/model data to status updater
-                msg_usage = getattr(msg, "usage", None)
-                if msg_usage:
+                elif isinstance(msg, SystemMessage):
+                    await self._handle_system_message(msg)
+
+                elif isinstance(msg, ResultMessage):
+                    if self.session_id is None and msg.session_id:
+                        self.session_id = msg.session_id
+                        await update_session_id(self.thread_id, msg.session_id)
+
+                    result_usage = getattr(msg, "usage", None)
+                    if self._status and result_usage:
+                        self._status.track_usage(usage=result_usage)
+
+                    if self._status:
+                        await self._status.finalize(
+                            cost_usd=msg.total_cost_usd,
+                            duration_ms=msg.duration_ms,
+                            tool_count=tool_count,
+                        )
+                        self._status = None
+
+                    if msg.is_error:
+                        try:
+                            await self._bot.send_message(
+                                chat_id=self._chat_id,
+                                message_thread_id=self.thread_id,
+                                text=f"❌ Error: SDK\n{msg.session_id or 'no session_id'}",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
+
                     logger.info(
-                        "AssistantMessage usage thread=%d: %s", self.thread_id, msg_usage
+                        "Turn complete for thread %d: cost=$%s, duration=%dms, tools=%d",
+                        self.thread_id, msg.total_cost_usd, msg.duration_ms, tool_count,
                     )
-                if self._status:
-                    self._status.track_usage(
-                        usage=msg_usage,
-                        model=getattr(msg, "model", None),
-                    )
-
-                for block in msg.content:
-                    if isinstance(block, TextBlock) and block.text:
-                        # STAT-03, STAT-04: Split long messages at code block boundaries
-                        parts = split_message(block.text)
-                        for part in parts:
-                            # Reply to the user's original message on first text chunk
-                            reply_to = None
-                            if not first_text_sent and self._current_reply_to:
-                                reply_to = self._current_reply_to
-                                first_text_sent = True
-
-                            # Escape angle brackets so Telegram's Markdown parser does
-                            # not raise "Unsupported start tag" on text like <идея>.
-                            escaped_part = escape_markdown_html(part)
-                            try:
-                                await self._bot.send_message(
-                                    chat_id=self._chat_id,
-                                    message_thread_id=self.thread_id,
-                                    text=escaped_part,
-                                    parse_mode="Markdown",
-                                    reply_to_message_id=reply_to,
-                                )
-                            except TelegramRetryAfter as e:
-                                await asyncio.sleep(e.retry_after)
-                                await self._bot.send_message(
-                                    chat_id=self._chat_id,
-                                    message_thread_id=self.thread_id,
-                                    text=escaped_part,
-                                    parse_mode="Markdown",
-                                    reply_to_message_id=reply_to,
-                                )
-                            except Exception:
-                                # Markdown parse failed — retry without parse_mode
-                                await self._bot.send_message(
-                                    chat_id=self._chat_id,
-                                    message_thread_id=self.thread_id,
-                                    text=part,
-                                    reply_to_message_id=reply_to,
-                                )
-                    elif isinstance(block, ToolUseBlock):
-                        # STAT-02: Track tool usage for status display with input details
-                        tool_count += 1
-                        if self._status:
-                            self._status.track_tool(block.name, block.input if hasattr(block, "input") else None)
-
-            elif isinstance(msg, TaskProgressMessage):
-                # Sub-agent progress — update status silently
-                if self._status:
-                    last_tool = getattr(msg, "last_tool_name", None)
-                    usage = getattr(msg, "usage", None)
-                    if last_tool:
-                        tools_n = usage.get("tool_uses", 0) if usage else 0
-                        self._status.track_tool(f"Agent/{last_tool}", {"description": f"sub-agent ({tools_n} tools)"})
-
-            elif isinstance(msg, TaskStartedMessage):
-                desc = getattr(msg, "description", "")
-                logger.info("Sub-agent started in thread %d: %s", self.thread_id, desc)
-
-            elif isinstance(msg, TaskNotificationMessage):
-                status = getattr(msg, "status", "")
-                summary = getattr(msg, "summary", "")
-                if status == "failed":
-                    try:
-                        await self._bot.send_message(
-                            chat_id=self._chat_id,
-                            message_thread_id=self.thread_id,
-                            text=f"⚠️ Sub-agent failed: {summary[:200]}",
-                        )
-                    except Exception:
-                        pass
-                logger.info("Sub-agent %s in thread %d: %s", status, self.thread_id, summary[:100])
-
-            elif isinstance(msg, RateLimitEvent):
-                info = msg.rate_limit_info
-                if info.status == "rejected":
-                    resets = ""
-                    if info.resets_at:
-                        import datetime
-                        dt = datetime.datetime.fromtimestamp(info.resets_at / 1000)
-                        resets = f" Resets at {dt.strftime('%H:%M')}"
-                    try:
-                        await self._bot.send_message(
-                            chat_id=self._chat_id,
-                            message_thread_id=self.thread_id,
-                            text=f"🚫 Rate limited!{resets}",
-                        )
-                    except Exception:
-                        pass
-                elif info.status == "allowed_warning" and info.utilization:
-                    try:
-                        await self._bot.send_message(
-                            chat_id=self._chat_id,
-                            message_thread_id=self.thread_id,
-                            text=f"⚠️ Rate limit: {info.utilization * 100:.0f}% used",
-                        )
-                    except Exception:
-                        pass
-
-            elif isinstance(msg, SystemMessage):
-                # Handle system events (compact, etc.) and notify user
-                await self._handle_system_message(msg)
-
-            elif isinstance(msg, ResultMessage):
-                # Persist session_id on first result
-                if self.session_id is None and msg.session_id:
-                    self.session_id = msg.session_id
-                    await update_session_id(self.thread_id, msg.session_id)
-
-                # Feed final usage to status before finalizing
-                result_usage = getattr(msg, "usage", None)
-                logger.info(
-                    "ResultMessage thread=%d: usage=%s cost=%s",
-                    self.thread_id, result_usage, msg.total_cost_usd,
-                )
-                if self._status and result_usage:
-                    self._status.track_usage(usage=result_usage)
-
-                # STAT-06: Finalize status with cost/duration summary
-                if self._status:
-                    await self._status.finalize(
-                        cost_usd=msg.total_cost_usd,
-                        duration_ms=msg.duration_ms,
-                        tool_count=tool_count,
-                    )
-                    self._status = None
-
-                # STAT-07: If error, send formatted error message
-                if msg.is_error:
-                    error_text = f"❌ Error: SDK\n{msg.session_id or 'no session_id returned'}"
-                    try:
-                        await self._bot.send_message(
-                            chat_id=self._chat_id,
-                            message_thread_id=self.thread_id,
-                            text=error_text,
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
-
-                logger.info(
-                    "Turn complete for thread %d: cost=$%s, duration=%dms, tools=%d",
-                    self.thread_id,
-                    msg.total_cost_usd,
-                    msg.duration_ms,
-                    tool_count,
-                )
         finally:
             watchdog_task.cancel()
             try:
