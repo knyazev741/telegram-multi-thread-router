@@ -60,13 +60,15 @@ def create_orchestrator_mcp_server(
 
     @tool(
         "create_session",
-        "Create a new Claude Code session in a new Telegram thread. Returns the thread ID.",
-        {"name": str, "workdir": str, "server": str},
+        "Create a new Claude Code session in a new Telegram thread. Returns the thread ID. "
+        "Model: 'opus' (default), 'sonnet', 'haiku', or full name like 'claude-sonnet-4-6'.",
+        {"name": str, "workdir": str, "server": str, "model": str},
     )
     async def create_session(args: dict) -> dict:
         name = args["name"]
         workdir = args["workdir"]
         server_name = args.get("server", "local")
+        model = args.get("model", "opus")
 
         try:
             # Validate remote server
@@ -79,7 +81,7 @@ def create_orchestrator_mcp_server(
 
             # Persist
             await insert_topic(thread_id, name)
-            await insert_session(thread_id, workdir, server=server_name)
+            await insert_session(thread_id, workdir, model=model, server=server_name)
 
             # Start session
             if server_name != "local":
@@ -88,6 +90,7 @@ def create_orchestrator_mcp_server(
                     workdir=workdir,
                     worker_id=server_name,
                     worker_registry=worker_registry,
+                    model=model,
                 )
             else:
                 await session_manager.create(
@@ -96,16 +99,23 @@ def create_orchestrator_mcp_server(
                     bot=bot,
                     chat_id=chat_id,
                     permission_manager=permission_manager,
+                    model=model,
                 )
 
             await bot.send_message(
                 chat_id=chat_id,
                 message_thread_id=thread_id,
-                text=f"✅ Session <b>{name}</b> started\nThread: <code>{thread_id}</code>\nServer: {server_name}\nWorkdir: <code>{workdir}</code>",
+                text=(
+                    f"Session <b>{name}</b> started\n"
+                    f"Model: <code>{model}</code>\n"
+                    f"Thread: <code>{thread_id}</code>\n"
+                    f"Server: {server_name}\n"
+                    f"Workdir: <code>{workdir}</code>"
+                ),
                 parse_mode="HTML",
             )
 
-            return {"content": [{"type": "text", "text": f"Session '{name}' created. Thread ID: {thread_id}, server: {server_name}"}]}
+            return {"content": [{"type": "text", "text": f"Session '{name}' created. Thread ID: {thread_id}, model: {model}, server: {server_name}"}]}
         except Exception as e:
             logger.error("create_session error: %s", e)
             return {"content": [{"type": "text", "text": f"Error creating session: {e}"}]}
