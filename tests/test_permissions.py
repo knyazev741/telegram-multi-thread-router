@@ -99,7 +99,7 @@ async def test_timeout_auto_deny(session_runner, permission_manager):
         result = await session_runner._can_use_tool("Bash", {"command": "ls"}, MagicMock())
 
     assert isinstance(result, PermissionResultDeny)
-    assert "Timed out" in result.message
+    assert "permission timeout" in result.message.lower()
     assert permission_manager.pending_count == 0
 
 
