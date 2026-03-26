@@ -107,15 +107,26 @@ async def _make_ask_user_hook(runner: SessionRunner):
     return _hook
 
 
+_TELEGRAM_TOOLS_HINT = """
+You have Telegram MCP tools available:
+- mcp__telegram__reply(text) — send a text message to the user
+- mcp__telegram__send_file(path) — send a file to the user (absolute path, max 50MB)
+- mcp__telegram__react(emoji, message_id) — add emoji reaction to a message
+- mcp__telegram__edit_message(text, message_id) — edit a previously sent message
+
+When the user asks you to send/share a file, use mcp__telegram__send_file with the absolute path.
+"""
+
+
 def _build_system_prompt(workdir: str) -> str:
-    """Read CLAUDE.md from workdir if present, append workdir context."""
+    """Read CLAUDE.md from workdir if present, append workdir context and Telegram tools hint."""
     claude_md = Path(workdir) / "CLAUDE.md"
     base = ""
     try:
         base = claude_md.read_text()
     except (FileNotFoundError, PermissionError):
         pass
-    return f"{base}\n\nYou are helping in directory {workdir}".strip()
+    return f"{base}\n\nYou are helping in directory {workdir}\n{_TELEGRAM_TOOLS_HINT}".strip()
 
 
 class SessionRunner:
