@@ -107,6 +107,7 @@ class CodexRunner:
         self._active_user_wait: asyncio.Future | None = None
         self._active_user_wait_cancel_value: str | dict[str, Any] | None = None
         self._agent_message_buffers: dict[str, str] = {}
+        self._task_items: dict[str, str] = {}
         self._provider_exhausted_callback: Callable[[str], Awaitable[None]] | None = None
         self._provider_exhausted_notified = False
 
@@ -291,102 +292,136 @@ class CodexRunner:
         self._current_turn_id = turn.get("id")
         turn_started_at = time.monotonic()
         tool_count = 0
+        stall_notified = False
+        watchdog_timeout = 180.0
 
-        while True:
-            message = await self._client.next_message()
-            method = message.get("method")
-            params = message.get("params", {})
+        async def _watchdog_notify() -> None:
+            nonlocal stall_notified
+            while True:
+                await asyncio.sleep(watchdog_timeout)
+                if not stall_notified and self.state == SessionState.RUNNING:
+                    stall_notified = True
+                    with contextlib.suppress(Exception):
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=(
+                                "⚠️ Codex session appears stalled (no response for 3 min). "
+                                "Use /stop to interrupt or send a message to nudge."
+                            ),
+                        )
 
-            if "id" in message and method:
-                await self._handle_server_request(message)
-                continue
+        watchdog_task = asyncio.create_task(_watchdog_notify())
 
-            if method == "thread/started":
-                thread = params.get("thread", {})
-                thread_id = thread.get("id")
-                if thread_id and thread_id != self.backend_session_id:
-                    self.backend_session_id = thread_id
-                    await update_backend_session_id(self.thread_id, thread_id)
-                continue
+        try:
+            while True:
+                message = await self._client.next_message()
+                watchdog_task.cancel()
+                stall_notified = False
+                watchdog_task = asyncio.create_task(_watchdog_notify())
+                method = message.get("method")
+                params = message.get("params", {})
 
-            if method == "thread/tokenUsage/updated":
-                usage = params.get("tokenUsage", {})
-                if self._status:
-                    self._status.track_usage(
-                        usage={
-                            "input_tokens": usage.get("inputTokens", 0),
-                            "output_tokens": usage.get("outputTokens", 0),
-                            "cache_read_input_tokens": usage.get("cacheReadInputTokens", 0),
-                            "cache_creation_input_tokens": usage.get("cacheCreationInputTokens", 0),
-                        },
-                        model=self.model,
-                    )
-                continue
+                if "id" in message and method:
+                    await self._handle_server_request(message)
+                    continue
 
-            if method == "model/rerouted":
-                model = params.get("model")
-                if model and model != self.model:
-                    self.model = model
-                    await update_session_model(self.thread_id, model)
-                    await self._bot.send_message(
-                        chat_id=self._chat_id,
-                        message_thread_id=self.thread_id,
-                        text=f"🔄 Model: <code>{model}</code>",
-                        parse_mode="HTML",
-                    )
-                continue
+                if method == "thread/started":
+                    thread = params.get("thread", {})
+                    thread_id = thread.get("id")
+                    if thread_id and thread_id != self.backend_session_id:
+                        self.backend_session_id = thread_id
+                        await update_backend_session_id(self.thread_id, thread_id)
+                    continue
 
-            if method == "item/started":
-                tool_count += self._track_item_started(params.get("item", {}))
-                continue
+                if method == "thread/tokenUsage/updated":
+                    usage = params.get("tokenUsage", {})
+                    if self._status:
+                        self._status.track_usage(
+                            usage={
+                                "input_tokens": usage.get("inputTokens", 0),
+                                "output_tokens": usage.get("outputTokens", 0),
+                                "cache_read_input_tokens": usage.get("cacheReadInputTokens", 0),
+                                "cache_creation_input_tokens": usage.get("cacheCreationInputTokens", 0),
+                            },
+                            model=self.model,
+                        )
+                    continue
 
-            if method == "item/agentMessage/delta":
-                item_id = params.get("itemId")
-                delta = params.get("delta", "")
-                if item_id and delta:
-                    self._agent_message_buffers[item_id] = (
-                        self._agent_message_buffers.get(item_id, "") + delta
-                    )
-                continue
+                if method == "model/rerouted":
+                    model = params.get("model")
+                    if model and model != self.model:
+                        self.model = model
+                        await update_session_model(self.thread_id, model)
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=f"🔄 Model: <code>{model}</code>",
+                            parse_mode="HTML",
+                        )
+                    continue
 
-            if method == "item/completed":
-                await self._handle_item_completed(params.get("item", {}))
-                continue
+                if method == "item/started":
+                    tool_count += self._track_item_started(params.get("item", {}))
+                    continue
 
-            if method == "turn/plan/updated":
-                if self._status:
-                    self._status.track_tool(
-                        "Agent",
-                        {"description": params.get("explanation", "plan update")},
-                    )
-                continue
+                if method == "item/agentMessage/delta":
+                    item_id = params.get("itemId")
+                    delta = params.get("delta", "")
+                    if item_id and delta:
+                        self._agent_message_buffers[item_id] = (
+                            self._agent_message_buffers.get(item_id, "") + delta
+                        )
+                    continue
 
-            if method == "error":
-                logger.warning("Codex turn error event in thread %d: %s", self.thread_id, params)
-                continue
+                if method == "item/completed":
+                    await self._handle_item_completed(params.get("item", {}))
+                    continue
 
-            if method == "turn/completed":
-                completed_turn = params.get("turn", {})
-                if self._status:
-                    await self._status.finalize(
-                        cost_usd=None,
-                        duration_ms=int((time.monotonic() - turn_started_at) * 1000),
-                        tool_count=tool_count,
-                    )
-                    self._status = None
+                if method == "turn/plan/updated":
+                    if self._status:
+                        self._status.track_tool(
+                            "Agent",
+                            {"description": params.get("explanation", "plan update")},
+                        )
+                    continue
 
-                status_value = completed_turn.get("status")
-                error = completed_turn.get("error")
-                if status_value == "failed" and error:
-                    message = error.get("message") if isinstance(error, dict) else str(error)
-                    if looks_like_provider_limit_error(message):
-                        self._schedule_provider_exhausted(message)
-                    await self._bot.send_message(
-                        chat_id=self._chat_id,
-                        message_thread_id=self.thread_id,
-                        text=f"❌ Codex turn failed\n{message or 'Unknown error'}",
-                    )
-                return
+                if method == "error":
+                    logger.warning("Codex turn error event in thread %d: %s", self.thread_id, params)
+                    continue
+
+                if method == "turn/completed":
+                    completed_turn = params.get("turn", {})
+                    if self._status:
+                        await self._status.finalize(
+                            cost_usd=None,
+                            duration_ms=int((time.monotonic() - turn_started_at) * 1000),
+                            tool_count=tool_count,
+                        )
+                        self._status = None
+
+                    status_value = completed_turn.get("status")
+                    error = completed_turn.get("error")
+                    if status_value == "failed" and error:
+                        message = error.get("message") if isinstance(error, dict) else str(error)
+                        if looks_like_provider_limit_error(message):
+                            self._schedule_provider_exhausted(message)
+                            await self._bot.send_message(
+                                chat_id=self._chat_id,
+                                message_thread_id=self.thread_id,
+                                text=f"🚫 Codex rate limited or quota exhausted\n{message or 'Unknown error'}",
+                            )
+                        else:
+                            await self._bot.send_message(
+                                chat_id=self._chat_id,
+                                message_thread_id=self.thread_id,
+                                text=f"❌ Codex turn failed\n{message or 'Unknown error'}",
+                            )
+                    return
+        finally:
+            watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog_task
 
     async def _inject_loop(self) -> None:
         """Inject queued messages into the currently active turn via turn/steer."""
@@ -598,6 +633,20 @@ class CodexRunner:
         if not self._status or not isinstance(item, dict):
             return 0
         item_type = item.get("type")
+        if item_type in {"task", "agentTask", "subtask", "agent"}:
+            item_id = item.get("id")
+            description = self._describe_task_item(item)
+            if item_id and description:
+                self._task_items[item_id] = description
+                asyncio.create_task(
+                    self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=f"🧠 Sub-agent started: {description[:200]}",
+                    )
+                )
+            self._status.track_tool("Agent", {"description": description or item_type})
+            return 1
         if item_type == "commandExecution":
             self._status.track_tool("Bash", {"command": item.get("command", "")})
             return 1
@@ -618,6 +667,18 @@ class CodexRunner:
         if not isinstance(item, dict):
             return
         item_type = item.get("type")
+        if item_type in {"task", "agentTask", "subtask", "agent"}:
+            item_id = item.get("id")
+            description = self._task_items.pop(item_id, self._describe_task_item(item))
+            status = str(item.get("status", "")).lower()
+            summary = self._describe_task_summary(item)
+            if status in {"failed", "error"}:
+                await self._bot.send_message(
+                    chat_id=self._chat_id,
+                    message_thread_id=self.thread_id,
+                    text=f"⚠️ Sub-agent failed: {(summary or description or item_type)[:200]}",
+                )
+            return
         if item_type == "agentMessage":
             item_id = item.get("id")
             text = self._agent_message_buffers.pop(item_id, "")
@@ -625,6 +686,24 @@ class CodexRunner:
                 text = self._extract_agent_message_text(item)
             if text:
                 await self._send_assistant_text(text)
+
+    @staticmethod
+    def _describe_task_item(item: dict[str, Any]) -> str:
+        """Return a compact human-readable task description when available."""
+        for key in ("title", "description", "summary", "name", "prompt"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _describe_task_summary(item: dict[str, Any]) -> str:
+        """Return a compact summary/result string from a completed task item."""
+        for key in ("summary", "result", "message"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
 
     def _extract_agent_message_text(self, item: dict[str, Any]) -> str:
         """Best-effort extract text from a completed agentMessage item."""
@@ -706,11 +785,54 @@ class CodexRunner:
                 message_thread_id=self.thread_id,
                 text=(
                     "Codex session commands:\n"
+                    "<code>/status</code> — show current session state\n"
+                    "<code>/config</code> — show Codex config for this thread\n"
                     "<code>/model &lt;name&gt;</code> — set default model\n"
                     "<code>/compact</code> — compact Codex thread\n"
                     "<code>/clear</code> / <code>/reset</code> — fresh Codex thread"
                 ),
                 parse_mode="HTML",
+            )
+            return True
+
+        if text == "/status":
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                message_thread_id=self.thread_id,
+                text=(
+                    f"Provider: <code>{self.provider}</code>\n"
+                    f"State: <code>{self.state.name.lower()}</code>\n"
+                    f"Model: <code>{self.model or 'default'}</code>\n"
+                    f"Workdir: <code>{self.workdir}</code>\n"
+                    f"Backend thread: <code>{self.backend_session_id or 'pending'}</code>\n"
+                    f"Auto-mode: <code>{'on' if self.auto_mode else 'off'}</code>"
+                ),
+                parse_mode="HTML",
+            )
+            return True
+
+        if text == "/config":
+            active_mcp = ", ".join(sorted({"telegram", *self._mcp_server_urls.keys()}))
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                message_thread_id=self.thread_id,
+                text=(
+                    "Codex config:\n"
+                    f"Model: <code>{self.model or 'default'}</code>\n"
+                    f"Workdir: <code>{self.workdir}</code>\n"
+                    f"MCP: <code>{active_mcp}</code>\n"
+                    f"Base instructions: <code>{'yes' if self._base_instructions else 'no'}</code>\n"
+                    f"Developer instructions: <code>{'yes' if self._developer_instructions else 'no'}</code>"
+                ),
+                parse_mode="HTML",
+            )
+            return True
+
+        if text == "/agents":
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                message_thread_id=self.thread_id,
+                text="Codex sub-agent lifecycle notifications are enabled for this session.",
             )
             return True
 
