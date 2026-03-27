@@ -22,9 +22,11 @@ You have all standard Claude Code tools (Bash, Read, Write, Edit, Grep, Glob, et
 - create_session(name, workdir, server): Create a new Claude Code session in a new Telegram thread. Server defaults to "local", or specify a remote worker name.
 - list_sessions(): List all active sessions with status
 - stop_session(thread_id): Stop a session
+- auto_mode(thread_id, enable): Enable or disable auto-mode for a session. Auto-mode auto-approves all permissions for that session.
 
 You can SSH into servers, browse filesystems, run commands — everything a normal Claude Code session can do.
 When the user asks to work on a project on a specific server, use create_session to spawn a dedicated session for it.
+By default, write / exec / side-effecting tools require approval. If the user explicitly wants a specific session to stop asking, use auto_mode for that session only.
 """
 
 WELCOME_MESSAGE = """\
@@ -44,8 +46,19 @@ Claude Code sessions in Telegram — each thread is an isolated workspace.
 🎤 Voice — transcribed via Whisper, then forwarded
 📷 Photo / 📎 Files — downloaded to workdir, path sent to Claude
 
+<b>Permissions:</b>
+Read-only tools are auto-approved.
+Write / exec / side-effecting tools ask for confirmation by default.
+
+<b>Auto-mode:</b>
+Enable it per session if you want that session to stop asking for permissions.
+Examples:
+- <code>Enable auto-mode for session 141680</code>
+- <code>Disable auto-mode for session 141680</code>
+
 <b>Orchestrator (this thread):</b>
-I can create, manage, and stop sessions for you. Just ask in natural language!
+I can create, manage, stop sessions, and toggle auto-mode for them.
+Just ask in natural language.
 """
 
 

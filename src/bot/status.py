@@ -89,6 +89,7 @@ class StatusUpdater:
         self._last_edit_time: float = 0.0
         self._pending_edit: asyncio.TimerHandle | None = None
         self._edit_lock = asyncio.Lock()
+        self._watchdog_note: str | None = None
 
         # Session metadata
         self._session_id = session_id
@@ -108,6 +109,7 @@ class StatusUpdater:
         self._current_tool = None
         self._tool_summary = None
         self._last_edit_time = 0.0
+        self._watchdog_note = None
         self._input_tokens = 0
         self._output_tokens = 0
         self._cache_read_tokens = 0
@@ -159,6 +161,28 @@ class StatusUpdater:
             self._cache_creation_tokens = usage.get(
                 "cache_creation_input_tokens", self._cache_creation_tokens
             )
+
+    async def show_watchdog_notice(self, silent_for_s: int) -> None:
+        """Update the status message to reflect prolonged silence without alarming the user."""
+        if self._message_id is None:
+            return
+
+        minutes = max(1, round(silent_for_s / 60))
+        self._watchdog_note = (
+            f"⏳ No updates for {minutes}m. Long-running tools can be quiet."
+        )
+
+        if self._pending_edit is not None:
+            self._pending_edit.cancel()
+            self._pending_edit = None
+
+        async with self._edit_lock:
+            await self._edit_status()
+            self._last_edit_time = time.monotonic()
+
+    def clear_watchdog_notice(self) -> None:
+        """Clear any previously shown watchdog note."""
+        self._watchdog_note = None
 
     def _schedule_edit(self) -> None:
         """Schedule a status edit, respecting the throttle interval."""
@@ -215,6 +239,9 @@ class StatusUpdater:
             stats += f" · {_format_tokens(total_ctx)} ctx ({pct:.0f}%)"
         lines.append(stats)
 
+        if self._watchdog_note:
+            lines.append(self._watchdog_note)
+
         status_text = "\n".join(lines)
 
         for attempt in range(2):
@@ -254,6 +281,7 @@ class StatusUpdater:
         if self._pending_edit is not None:
             self._pending_edit.cancel()
             self._pending_edit = None
+        self._watchdog_note = None
 
         if self._message_id is not None:
             cost_str = f"${cost_usd:.4f}" if cost_usd is not None else "n/a"
@@ -311,6 +339,7 @@ class StatusUpdater:
         if self._pending_edit is not None:
             self._pending_edit.cancel()
             self._pending_edit = None
+        self._watchdog_note = None
         self._message_id = None
 
 

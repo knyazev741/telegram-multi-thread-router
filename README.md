@@ -20,9 +20,10 @@ A Telegram bot that runs **multiple Claude Code sessions in parallel** — each 
 - **1 thread = 1 session** — isolated Claude Code sessions per Telegram thread
 - **Orchestrator** — a dedicated Claude session that manages all other sessions via natural language
 - **Auto-mode** — per-session toggle to auto-approve all permissions (no buttons needed)
-- **Permission system** — tool approvals via inline buttons (safe tools auto-approved)
+- **Permission system** — read-only tools auto-approved, write/exec tools confirmed via inline buttons
 - **Voice messages** — transcribed via Whisper and forwarded to Claude
-- **Photo & file support** — files downloaded to workdir, paths sent to Claude
+- **Photo support** — local sessions send images to Claude natively; remote workers fall back to file paths
+- **File support** — documents are downloaded to the workdir and passed to Claude
 - **Multi-server** — run sessions on different machines via TCP IPC workers
 - **Session persistence** — sessions survive bot restarts via SQLite + session resume
 - **Real-time status** — editable status message shows what Claude is doing
@@ -59,11 +60,27 @@ Telegram Bot (threads)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 
+Verify local prerequisites before you start:
+
+```bash
+python3.11 --version
+claude --version
+```
+
+If `python` on your machine is not Python 3.11+, use `python3.11` explicitly in the setup commands below.
+
 ### Bot Setup in BotFather
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token
 2. Go to **Bot Settings → Threaded Mode → Enable**
 3. **Send `/start` to your bot** before launching the script — the bot needs an active chat with you to create threads
+
+### Get Your Telegram User ID
+
+1. Open [@Get_myidrobot](https://t.me/Get_myidrobot)
+2. Send `/start`
+3. Copy your numeric Telegram user ID
+4. Put it into `.env` as `OWNER_USER_ID`
 
 ### Installation
 
@@ -71,7 +88,8 @@ Telegram Bot (threads)
 git clone https://github.com/knyazev741/telegram-multi-thread-router.git
 cd telegram-multi-thread-router
 
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
@@ -86,8 +104,25 @@ Edit `.env`:
 | Variable | Description |
 |----------|-------------|
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
-| `OWNER_USER_ID` | Your Telegram user ID — get it from [@Get_myidrobot](https://t.me/Get_myidrobot) |
-| `AUTH_TOKEN` | Shared secret for TCP worker authentication |
+| `OWNER_USER_ID` | Your Telegram user ID from [@Get_myidrobot](https://t.me/Get_myidrobot) |
+| `AUTH_TOKEN` | Shared secret for bot ↔ worker IPC authentication. If you run only one local bot process, this can be any random string. |
+
+Example local-only `.env`:
+
+```env
+BOT_TOKEN=123456789:AA...
+OWNER_USER_ID=123456789
+AUTH_TOKEN=local-dev-secret-change-me
+```
+
+To generate a random `AUTH_TOKEN`:
+
+```bash
+python3.11 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(24))
+PY
+```
 
 ### Run
 
@@ -95,7 +130,49 @@ Edit `.env`:
 python -m src
 ```
 
-Send any message to the bot. It auto-detects the chat and creates an **🎯 Orchestrator** thread — this is the main interface for managing sessions.
+The expected first-run flow is:
+
+1. Start the bot process
+2. Open your bot in Telegram
+3. Send `/start`
+4. Send any normal message
+5. The bot auto-detects the chat and creates an **🎯 Orchestrator** thread
+
+The Orchestrator thread is the main interface for managing sessions.
+
+## For Agents
+
+If you are an AI agent or automation assistant helping a user install this project, do as much of the setup as possible yourself and ask the user only for the Telegram-side actions that cannot be automated from the local machine.
+
+Recommended flow:
+
+1. Clone the repository into a clean directory.
+2. Detect a usable Python 3.11+ interpreter. Do not assume `python` points to 3.11.
+3. Create `.venv`, install dependencies, and verify `claude --version`.
+4. Create `.env` yourself once the user provides:
+   - `BOT_TOKEN`
+   - `OWNER_USER_ID`
+   - optional: choose or generate `AUTH_TOKEN` for them
+5. Explicitly tell the user to do these Telegram-side steps:
+   - create the bot in `@BotFather`
+   - enable **Threaded Mode**
+   - send `/start` to the bot
+   - get their Telegram numeric user ID from `@Get_myidrobot`
+6. Start the bot yourself and watch logs for:
+   - bot startup
+   - chat auto-detection
+   - orchestrator topic creation
+   - permission prompts
+7. After startup, ask the user to send one simple message and verify the Orchestrator appears.
+
+What an agent should explain clearly:
+
+- `BOT_TOKEN` is the bot token from `@BotFather`
+- `OWNER_USER_ID` is the user's Telegram numeric ID, not chat title or username
+- `AUTH_TOKEN` is just a shared secret for IPC; for local-only usage it can be any random string
+- if setup commands fail, confirm Python version first
+- if the bot starts but Telegram says unauthorized, the bot token is wrong
+- if the bot starts and waits for chat detection, the user still needs to send `/start` and one normal message
 
 ## Usage
 
@@ -129,19 +206,19 @@ All commands work from **any thread** (including Orchestrator):
 |-------|----------|
 | 💬 Text | Forwarded to Claude as a message |
 | 🎤 Voice | Transcribed via Whisper, then forwarded |
-| 📷 Photo | Downloaded to workdir, path sent to Claude |
+| 📷 Photo | Local sessions send the image natively to Claude; remote sessions save to workdir and send the path |
 | 📎 Document | Downloaded to workdir, path sent to Claude |
 
 ### Permission System
 
-When Claude wants to use a tool (e.g., run a bash command), you get inline buttons:
+When Claude wants to use a write / exec / side-effecting tool (for example `Bash`, `Edit`, or `Write`), you get inline buttons:
 
 ```
 🔧 Bash: rm -rf node_modules
 [✅ Allow] [✅ Allow All] [❌ Deny]
 ```
 
-Safe tools (Read, Glob, Grep, etc.) are auto-approved. Dangerous tools require explicit approval. Use **auto-mode** (via Orchestrator) to skip all permission prompts for a session.
+Read-only tools such as `Read`, `Glob`, `Grep`, `ToolSearch`, `WebFetch`, and `WebSearch` are auto-approved. Tools that can change files, run commands, or perform external actions require explicit approval. Use **auto-mode** (via Orchestrator) to skip all permission prompts for a session.
 
 ## Multi-Server Support
 
