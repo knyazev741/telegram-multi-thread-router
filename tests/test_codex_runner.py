@@ -141,6 +141,88 @@ async def test_run_turn_updates_backend_session_and_sends_text(monkeypatch):
     update_backend_session_id.assert_not_called()
 
 
+async def test_run_turn_streams_codex_delta_when_enabled(monkeypatch):
+    sent = []
+
+    async def _send_message(**kwargs):
+        sent.append(kwargs)
+        return MagicMock(message_id=len(sent))
+
+    monkeypatch.setattr("src.sessions.codex_runner.settings.stream_intermediate_messages", True)
+
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(side_effect=_send_message)
+    runner = CodexRunner(thread_id=10, workdir="/tmp", bot=bot, chat_id=5)
+    runner.backend_session_id = "thread-123"
+    runner._current_reply_to = 99
+    runner._status = MagicMock()
+    runner._status.track_usage = MagicMock()
+    runner._status.finalize = AsyncMock()
+    runner._client = _FakeClient(
+        messages=[
+            {
+                "method": "item/agentMessage/delta",
+                "params": {"itemId": "msg-1", "delta": "hello from codex.\n"},
+            },
+            {
+                "method": "item/completed",
+                "params": {"item": {"id": "msg-1", "type": "agentMessage"}},
+            },
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+        ]
+    )
+
+    await runner._run_turn("hello")
+
+    assert len(sent) == 1
+    assert sent[0]["text"] == "hello from codex.\n"
+    assert sent[0]["reply_to_message_id"] == 99
+
+
+async def test_run_turn_buffers_codex_delta_when_streaming_disabled(monkeypatch):
+    sent = []
+
+    async def _send_message(**kwargs):
+        sent.append(kwargs)
+        return MagicMock(message_id=len(sent))
+
+    monkeypatch.setattr("src.sessions.codex_runner.settings.stream_intermediate_messages", False)
+
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(side_effect=_send_message)
+    runner = CodexRunner(thread_id=10, workdir="/tmp", bot=bot, chat_id=5)
+    runner.backend_session_id = "thread-123"
+    runner._current_reply_to = 99
+    runner._status = MagicMock()
+    runner._status.track_usage = MagicMock()
+    runner._status.finalize = AsyncMock()
+    runner._client = _FakeClient(
+        messages=[
+            {
+                "method": "item/agentMessage/delta",
+                "params": {"itemId": "msg-1", "delta": "hello"},
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "id": "msg-1",
+                        "type": "agentMessage",
+                        "content": [{"type": "outputText", "text": "hello from codex"}],
+                    }
+                },
+            },
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+        ]
+    )
+
+    await runner._run_turn("hello")
+
+    assert len(sent) == 1
+    assert sent[0]["text"] == "hello from codex"
+    assert sent[0]["reply_to_message_id"] == 99
+
+
 async def test_interrupt_requests_turn_interrupt():
     runner = CodexRunner(thread_id=1, workdir="/tmp", bot=AsyncMock(), chat_id=1)
     runner.state = SessionState.RUNNING

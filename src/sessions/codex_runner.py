@@ -17,6 +17,7 @@ from aiogram.exceptions import TelegramRetryAfter
 
 from src.bot.output import TypingIndicator, escape_markdown_html, split_message
 from src.bot.status import StatusUpdater
+from src.config import settings
 from src.db.queries import (
     update_backend_session_id,
     update_session_model,
@@ -107,9 +108,11 @@ class CodexRunner:
         self._active_user_wait: asyncio.Future | None = None
         self._active_user_wait_cancel_value: str | dict[str, Any] | None = None
         self._agent_message_buffers: dict[str, str] = {}
+        self._agent_message_sent_lengths: dict[str, int] = {}
         self._task_items: dict[str, str] = {}
         self._provider_exhausted_callback: Callable[[str], Awaitable[None]] | None = None
         self._provider_exhausted_notified = False
+        self._turn_first_text_sent = False
 
     def _build_config_overrides(self) -> list[str]:
         """Return codex CLI config overrides for this runner."""
@@ -182,6 +185,8 @@ class CodexRunner:
                     self._current_reply_to = None
                     self._current_turn_id = None
                     self._agent_message_buffers.clear()
+                    self._agent_message_sent_lengths.clear()
+                    self._turn_first_text_sent = False
 
                 if self.state == SessionState.INTERRUPTING:
                     self.state = SessionState.STOPPED
@@ -294,6 +299,8 @@ class CodexRunner:
         tool_count = 0
         stall_notified = False
         watchdog_timeout = 180.0
+        self._turn_first_text_sent = False
+        self._agent_message_sent_lengths.clear()
 
         async def _watchdog_notify() -> None:
             nonlocal stall_notified
@@ -372,6 +379,8 @@ class CodexRunner:
                         self._agent_message_buffers[item_id] = (
                             self._agent_message_buffers.get(item_id, "") + delta
                         )
+                        if settings.stream_intermediate_messages:
+                            await self._flush_streaming_agent_text(item_id)
                     continue
 
                 if method == "item/completed":
@@ -682,10 +691,31 @@ class CodexRunner:
         if item_type == "agentMessage":
             item_id = item.get("id")
             text = self._agent_message_buffers.pop(item_id, "")
-            if not text:
-                text = self._extract_agent_message_text(item)
+            sent_length = self._agent_message_sent_lengths.pop(item_id, 0)
+            completed_text = self._extract_agent_message_text(item)
+            if completed_text and len(completed_text) >= len(text):
+                text = completed_text
             if text:
-                await self._send_assistant_text(text)
+                if settings.stream_intermediate_messages:
+                    remainder = text[sent_length:]
+                    if remainder:
+                        await self._send_assistant_text(remainder)
+                else:
+                    await self._send_assistant_text(text)
+
+    async def _flush_streaming_agent_text(self, item_id: str, force: bool = False) -> None:
+        """Flush accumulated agent text when there is enough visible progress."""
+        text = self._agent_message_buffers.get(item_id, "")
+        sent_length = self._agent_message_sent_lengths.get(item_id, 0)
+        if sent_length >= len(text):
+            return
+        unsent = text[sent_length:]
+        if not unsent:
+            return
+        if not force and len(unsent) < 120 and not any(ch in unsent for ch in ("\n", ".", "!", "?", ":")):
+            return
+        await self._send_assistant_text(unsent)
+        self._agent_message_sent_lengths[item_id] = len(text)
 
     @staticmethod
     def _describe_task_item(item: dict[str, Any]) -> str:
@@ -821,6 +851,7 @@ class CodexRunner:
                     f"Model: <code>{self.model or 'default'}</code>\n"
                     f"Workdir: <code>{self.workdir}</code>\n"
                     f"MCP: <code>{active_mcp}</code>\n"
+                    f"Intermediate messages: <code>{'stream' if settings.stream_intermediate_messages else 'final-only'}</code>\n"
                     f"Base instructions: <code>{'yes' if self._base_instructions else 'no'}</code>\n"
                     f"Developer instructions: <code>{'yes' if self._developer_instructions else 'no'}</code>"
                 ),
@@ -840,9 +871,8 @@ class CodexRunner:
 
     async def _send_assistant_text(self, text: str) -> None:
         """Forward assistant text to Telegram, replying to the triggering message once."""
-        first_part = True
         for part in split_message(text):
-            reply_to = self._current_reply_to if first_part else None
+            reply_to = self._current_reply_to if not self._turn_first_text_sent else None
             escaped_part = escape_markdown_html(part)
             try:
                 await self._bot.send_message(
@@ -868,7 +898,7 @@ class CodexRunner:
                     text=part,
                     reply_to_message_id=reply_to,
                 )
-            first_part = False
+            self._turn_first_text_sent = True
 
     async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
         """Queue a prompt for the next or active Codex turn."""

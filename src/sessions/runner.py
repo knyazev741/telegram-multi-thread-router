@@ -31,6 +31,7 @@ from claude_agent_sdk.types import (
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 
+from src.config import settings
 from src.sessions.state import SessionState
 from src.sessions.backend import SessionProvider, looks_like_provider_limit_error
 from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
@@ -538,10 +539,44 @@ class SessionRunner:
         """
         tool_count = 0
         first_text_sent = False
+        buffered_text_parts: list[str] = []
         soft_watchdog_notified = False
         hard_watchdog_notified = False
         soft_watchdog_timeout = 180.0  # 3 minutes
         hard_watchdog_timeout = 600.0  # 10 minutes
+
+        async def _send_assistant_text(text: str) -> None:
+            nonlocal first_text_sent
+            for part in split_message(text):
+                reply_to = None
+                if not first_text_sent and self._current_reply_to:
+                    reply_to = self._current_reply_to
+                    first_text_sent = True
+                escaped_part = escape_markdown_html(part)
+                try:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=escaped_part,
+                        parse_mode="Markdown",
+                        reply_to_message_id=reply_to,
+                    )
+                except TelegramRetryAfter as e:
+                    await asyncio.sleep(e.retry_after)
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=escaped_part,
+                        parse_mode="Markdown",
+                        reply_to_message_id=reply_to,
+                    )
+                except Exception:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=part,
+                        reply_to_message_id=reply_to,
+                    )
 
         async def _watchdog_notify() -> None:
             """Escalate from a soft status note to a hard warning if silence persists."""
@@ -604,37 +639,10 @@ class SessionRunner:
 
                     for block in msg.content:
                         if isinstance(block, TextBlock) and block.text:
-                            parts = split_message(block.text)
-                            for part in parts:
-                                reply_to = None
-                                if not first_text_sent and self._current_reply_to:
-                                    reply_to = self._current_reply_to
-                                    first_text_sent = True
-                                escaped_part = escape_markdown_html(part)
-                                try:
-                                    await self._bot.send_message(
-                                        chat_id=self._chat_id,
-                                        message_thread_id=self.thread_id,
-                                        text=escaped_part,
-                                        parse_mode="Markdown",
-                                        reply_to_message_id=reply_to,
-                                    )
-                                except TelegramRetryAfter as e:
-                                    await asyncio.sleep(e.retry_after)
-                                    await self._bot.send_message(
-                                        chat_id=self._chat_id,
-                                        message_thread_id=self.thread_id,
-                                        text=escaped_part,
-                                        parse_mode="Markdown",
-                                        reply_to_message_id=reply_to,
-                                    )
-                                except Exception:
-                                    await self._bot.send_message(
-                                        chat_id=self._chat_id,
-                                        message_thread_id=self.thread_id,
-                                        text=part,
-                                        reply_to_message_id=reply_to,
-                                    )
+                            if settings.stream_intermediate_messages:
+                                await _send_assistant_text(block.text)
+                            else:
+                                buffered_text_parts.append(block.text)
                         elif isinstance(block, ToolUseBlock):
                             tool_count += 1
                             if self._status:
@@ -701,6 +709,10 @@ class SessionRunner:
                     if self.session_id is None and msg.session_id:
                         self.session_id = msg.session_id
                         await update_session_id(self.thread_id, msg.session_id)
+
+                    if not settings.stream_intermediate_messages and buffered_text_parts:
+                        await _send_assistant_text("".join(buffered_text_parts))
+                        buffered_text_parts.clear()
 
                     result_usage = getattr(msg, "usage", None)
                     if self._status and result_usage:

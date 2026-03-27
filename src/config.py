@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     ipc_port: int = 9800
     enable_codex: bool = False
     default_provider: Literal["claude", "codex"] = "claude"
+    stream_intermediate_messages: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

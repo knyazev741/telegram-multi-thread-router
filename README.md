@@ -28,6 +28,7 @@ Think of it as a Telegram-native session router: thread-per-workspace, permissio
 - **Auto-mode** — per-session toggle to auto-approve all permissions (no buttons needed)
 - **Permission system** — read-only tools auto-approved, write/exec tools confirmed via inline buttons
 - **Provider fallback for orchestrator** — if the active orchestrator provider is exhausted, it can fall back to the other enabled provider
+- **Intermediate output mode** — configure whether assistant text streams mid-turn or is shown mostly at completion
 - **Voice messages** — transcribed via Whisper and forwarded to the active provider
 - **Photo support** — local sessions send images natively; remote workers receive photo bytes over IPC
 - **File support** — documents are downloaded to the workdir; worker-produced files can be sent back to Telegram
@@ -118,6 +119,7 @@ Edit `.env`:
 | `AUTH_TOKEN` | Shared secret for bot ↔ worker IPC authentication. If you run only one local bot process, this can be any random string. |
 | `ENABLE_CODEX` | `true` to allow Codex sessions in addition to Claude |
 | `DEFAULT_PROVIDER` | `claude` or `codex` for new sessions and orchestrator default |
+| `STREAM_INTERMEDIATE_MESSAGES` | `true` to stream assistant text during a turn, `false` to keep Telegram quieter and send mostly final text |
 | `CHAT_ID` | Optional fixed target chat/forum; if omitted, auto-detected on first owner message |
 | `IPC_PORT` | Optional bot IPC port for remote workers; defaults to `9800` |
 
@@ -129,6 +131,7 @@ OWNER_USER_ID=123456789
 AUTH_TOKEN=local-dev-secret-change-me
 ENABLE_CODEX=true
 DEFAULT_PROVIDER=claude
+STREAM_INTERMEDIATE_MESSAGES=true
 ```
 
 To generate a random `AUTH_TOKEN`:
@@ -230,6 +233,23 @@ All commands work from **any thread** (including Orchestrator):
 | 🎤 Voice | Transcribed via Whisper, then forwarded |
 | 📷 Photo | Local sessions send images natively; remote sessions receive image bytes over IPC |
 | 📎 Document | Downloaded to workdir; remote workers receive file bytes over IPC |
+
+### Intermediate Message Streaming
+
+The bot supports two output styles for assistant text:
+
+- `STREAM_INTERMEDIATE_MESSAGES=true`
+  - stream intermediate assistant text while a turn is still running
+  - best when you want to watch Claude or Codex think in real time
+- `STREAM_INTERMEDIATE_MESSAGES=false`
+  - keep Telegram quieter
+  - show status/progress updates during the turn, but send most assistant text only near the end
+
+Notes:
+
+- Claude already supports native partial output; this flag decides whether to surface that partial text in Telegram immediately
+- Codex streams intermediate text in coalesced chunks when enabled, instead of waiting only for item completion
+- regardless of this flag, status updates, permission prompts, rate-limit messages, and error messages still appear during the turn
 
 ### Permission System
 
