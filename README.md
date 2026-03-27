@@ -1,6 +1,6 @@
 # Telegram Multi-Thread Router
 
-> Run multiple [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions in Telegram — each thread is an isolated workspace.
+> Run provider-backed coding sessions in Telegram. Claude Code is the default path; Codex is available as an additional provider.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -11,45 +11,53 @@
 
 ## What is this?
 
-A Telegram bot that runs **multiple Claude Code sessions in parallel** — each thread is an independent workspace with full tool access (Bash, file editing, web search, and more).
+A Telegram bot that runs **multiple coding sessions in parallel**. Each Telegram thread is an isolated workspace backed by a provider session.
 
-**Think of it as Claude Code CLI, but in Telegram** — with voice messages, file sharing, permission buttons, and multi-server support.
+Current provider model:
+
+- **Claude Code** is the default provider and the default orchestrator path
+- **Codex** is supported as an additional provider and can be enabled per deployment
+
+Think of it as a Telegram-native session router: thread-per-workspace, permission buttons, voice/photo/file ingestion, multi-server workers, and a built-in orchestrator thread that can create and manage other sessions.
 
 ### Key Features
 
-- **1 thread = 1 session** — isolated Claude Code sessions per Telegram thread
-- **Orchestrator** — a dedicated Claude session that manages all other sessions via natural language
+- **1 thread = 1 session** — isolated Claude or Codex sessions per Telegram thread
+- **Provider-aware orchestration** — orchestrator creates sessions on the default provider unless you ask for another one
+- **Claude default, Codex optional** — `DEFAULT_PROVIDER=claude|codex`, `ENABLE_CODEX=true|false`
 - **Auto-mode** — per-session toggle to auto-approve all permissions (no buttons needed)
 - **Permission system** — read-only tools auto-approved, write/exec tools confirmed via inline buttons
-- **Voice messages** — transcribed via Whisper and forwarded to Claude
-- **Photo support** — local sessions send images to Claude natively; remote workers fall back to file paths
-- **File support** — documents are downloaded to the workdir and passed to Claude
+- **Provider fallback for orchestrator** — if the active orchestrator provider is exhausted, it can fall back to the other enabled provider
+- **Voice messages** — transcribed via Whisper and forwarded to the active provider
+- **Photo support** — local sessions send images natively; remote workers receive photo bytes over IPC
+- **File support** — documents are downloaded to the workdir; worker-produced files can be sent back to Telegram
 - **Multi-server** — run sessions on different machines via TCP IPC workers
 - **Session persistence** — sessions survive bot restarts via SQLite + session resume
-- **Real-time status** — editable status message shows what Claude is doing
-- **Telegram MCP tools** — Claude can reply, send files, react with emoji directly in Telegram
+- **Real-time status** — editable status message shows what the session is doing
+- **Telegram MCP tools** — sessions can reply, send files, react with emoji, and edit messages directly in Telegram
+- **Codex app-server integration** — Codex sessions run through `codex app-server`, including approvals, questions, Telegram output tools, and remote worker support
 
 ## Architecture
 
 ```
 Telegram Bot (threads)
-  ├── 🎯 Orchestrator   → Main interface: creates/manages sessions via chat
-  ├── 📁 my-project     → Claude Code session (workdir: /path/to/project)
-  ├── 🔧 api-server     → Claude Code session (remote worker)
+  ├── 🎯 Orchestrator   → Default provider session that creates/manages others
+  ├── 📁 my-project     → Claude or Codex session (local)
+  ├── 🔧 api-server     → Claude or Codex session (remote worker)
   └── ...
 ```
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Telegram    │────▶│  Bot (aiogram 3) │────▶│  Claude Code     │
-│  Messages    │◀────│  + Dispatcher    │◀────│  SDK Sessions    │
-└─────────────┘     └──────────────────┘     └─────────────────┘
-                           │                         │
-                    ┌──────┴──────┐           ┌──────┴──────┐
-                    │  SQLite DB  │           │  TCP IPC     │
-                    │  (sessions, │           │  (remote     │
-                    │   topics)   │           │   workers)   │
-                    └─────────────┘           └─────────────┘
+┌─────────────┐     ┌──────────────────┐     ┌──────────────────────────┐
+│  Telegram   │────▶│  Bot (aiogram 3) │────▶│  Session backends         │
+│  threads    │◀────│  + Dispatcher    │◀────│  Claude SDK / Codex app   │
+└─────────────┘     └──────────────────┘     └──────────────────────────┘
+                          │                            │
+                   ┌──────┴──────┐              ┌──────┴──────┐
+                   │  SQLite DB  │              │  TCP IPC     │
+                   │  sessions,  │              │  remote      │
+                   │  topics     │              │  workers     │
+                   └─────────────┘              └─────────────┘
 ```
 
 ## Quick Start
@@ -58,6 +66,7 @@ Telegram Bot (threads)
 
 - Python 3.11+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- Optional: [Codex CLI](https://developers.openai.com/codex/cli) installed and authenticated if you want Codex sessions
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 
 Verify local prerequisites before you start:
@@ -65,6 +74,7 @@ Verify local prerequisites before you start:
 ```bash
 python3.11 --version
 claude --version
+codex --version   # optional
 ```
 
 If `python` on your machine is not Python 3.11+, use `python3.11` explicitly in the setup commands below.
@@ -106,6 +116,10 @@ Edit `.env`:
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
 | `OWNER_USER_ID` | Your Telegram user ID from [@Get_myidrobot](https://t.me/Get_myidrobot) |
 | `AUTH_TOKEN` | Shared secret for bot ↔ worker IPC authentication. If you run only one local bot process, this can be any random string. |
+| `ENABLE_CODEX` | `true` to allow Codex sessions in addition to Claude |
+| `DEFAULT_PROVIDER` | `claude` or `codex` for new sessions and orchestrator default |
+| `CHAT_ID` | Optional fixed target chat/forum; if omitted, auto-detected on first owner message |
+| `IPC_PORT` | Optional bot IPC port for remote workers; defaults to `9800` |
 
 Example local-only `.env`:
 
@@ -113,6 +127,8 @@ Example local-only `.env`:
 BOT_TOKEN=123456789:AA...
 OWNER_USER_ID=123456789
 AUTH_TOKEN=local-dev-secret-change-me
+ENABLE_CODEX=true
+DEFAULT_PROVIDER=claude
 ```
 
 To generate a random `AUTH_TOKEN`:
@@ -136,7 +152,7 @@ The expected first-run flow is:
 2. Open your bot in Telegram
 3. Send `/start`
 4. Send any normal message
-5. The bot auto-detects the chat and creates an **🎯 Orchestrator** thread
+5. The bot auto-detects the chat and creates an **🎯 Orchestrator** thread on the default provider
 
 The Orchestrator thread is the main interface for managing sessions.
 
@@ -149,21 +165,23 @@ Recommended flow:
 1. Clone the repository into a clean directory.
 2. Detect a usable Python 3.11+ interpreter. Do not assume `python` points to 3.11.
 3. Create `.venv`, install dependencies, and verify `claude --version`.
-4. Create `.env` yourself once the user provides:
+4. If Codex support is desired, also verify `codex --version`.
+5. Create `.env` yourself once the user provides:
    - `BOT_TOKEN`
    - `OWNER_USER_ID`
    - optional: choose or generate `AUTH_TOKEN` for them
-5. Explicitly tell the user to do these Telegram-side steps:
+   - optional: set `ENABLE_CODEX=true` and `DEFAULT_PROVIDER=claude|codex`
+6. Explicitly tell the user to do these Telegram-side steps:
    - create the bot in `@BotFather`
    - enable **Threaded Mode**
    - send `/start` to the bot
    - get their Telegram numeric user ID from `@Get_myidrobot`
-6. Start the bot yourself and watch logs for:
+7. Start the bot yourself and watch logs for:
    - bot startup
    - chat auto-detection
    - orchestrator topic creation
    - permission prompts
-7. After startup, ask the user to send one simple message and verify the Orchestrator appears.
+8. After startup, ask the user to send one simple message and verify the Orchestrator appears.
 
 What an agent should explain clearly:
 
@@ -178,14 +196,18 @@ What an agent should explain clearly:
 
 ### Orchestrator (main interface)
 
-The Orchestrator is a Claude Code session (Sonnet) with extra management tools. Talk to it in natural language:
+The Orchestrator is a provider session with extra management tools. By default it starts on `DEFAULT_PROVIDER`, which is usually `claude`.
+
+Talk to it in natural language:
 
 - *"Create a session for my-project in /home/user/my-project"*
+- *"Create a Codex session for my-project in /home/user/my-project"*
+- *"Create a session on worker personal in /root/agent"*
 - *"List all sessions"*
 - *"Stop session 12345"*
 - *"Enable auto-mode for session 12345"* — auto-approves all permissions
 
-The Orchestrator is also a full Claude Code session itself — it can SSH into servers, browse filesystems, run commands.
+The Orchestrator is also a full coding session itself — it can inspect repositories, run commands, and manage worker-backed sessions.
 
 ### Commands
 
@@ -193,49 +215,57 @@ All commands work from **any thread** (including Orchestrator):
 
 | Command | Description |
 |---------|-------------|
-| `/new <name> <workdir> [server]` | Create a new session in a new thread |
+| `/new <name> <workdir> [server] [provider]` | Create a new session in a new thread |
 | `/list` | List all active sessions |
 | `/restart` | Graceful restart (preserves sessions) |
 | `/stop` | Interrupt current turn (like Escape in CLI) |
 | `/close` | Stop session + delete thread |
-| Any other `/command` | Forwarded to Claude Code (`/model`, `/clear`, `/compact`, etc.) |
+| Any other `/command` | Forwarded to the active provider (`/model`, `/clear`, `/compact`, `/reset`, etc.) |
 
 ### Input Types
 
 | Input | Behavior |
 |-------|----------|
-| 💬 Text | Forwarded to Claude as a message |
+| 💬 Text | Forwarded to the active provider |
 | 🎤 Voice | Transcribed via Whisper, then forwarded |
-| 📷 Photo | Local sessions send the image natively to Claude; remote sessions save to workdir and send the path |
-| 📎 Document | Downloaded to workdir, path sent to Claude |
+| 📷 Photo | Local sessions send images natively; remote sessions receive image bytes over IPC |
+| 📎 Document | Downloaded to workdir; remote workers receive file bytes over IPC |
 
 ### Permission System
 
-When Claude wants to use a write / exec / side-effecting tool (for example `Bash`, `Edit`, or `Write`), you get inline buttons:
+When the active provider wants to use a write / exec / side-effecting tool, you get inline buttons:
 
 ```
 🔧 Bash: rm -rf node_modules
 [✅ Allow] [✅ Allow All] [❌ Deny]
 ```
 
-Read-only tools such as `Read`, `Glob`, `Grep`, `ToolSearch`, `WebFetch`, and `WebSearch` are auto-approved. Tools that can change files, run commands, or perform external actions require explicit approval. Use **auto-mode** (via Orchestrator) to skip all permission prompts for a session.
+Read-only tools are auto-approved. Tools that can change files, run commands, or perform external actions require explicit approval. Use **auto-mode** to skip prompts for a specific session.
+
+Codex parity notes:
+
+- Codex sessions support Telegram output tools (`reply`, `send_file`, `react`, `edit_message`)
+- Codex sessions support interactive questions and approval prompts
+- The orchestrator can fall back between Claude and Codex if the active provider is exhausted
+- Claude remains the default and most conservative production path
 
 ## Multi-Server Support
 
-Run Claude Code sessions on different machines by connecting **workers** via TCP:
+Run provider sessions on different machines by connecting **workers** via TCP:
 
 **On the worker machine:**
 ```bash
-pip install -e .
-python -m src.ipc.client --host <bot-server-ip> --port 9800 --token $AUTH_TOKEN --worker-id my-worker
+pip install -e ".[dev]"
+python -m src.worker --host <bot-server-ip> --port 9800 --token $AUTH_TOKEN --worker-id my-worker
 ```
 
 **Create a session on the worker** (via Orchestrator or `/new`):
 ```
 /new my-project /path/to/project my-worker
+/new my-project /path/to/project my-worker codex
 ```
 
-The bot acts as a **hub** — it handles Telegram and dispatches to workers. Workers run Claude Code sessions locally on their machines.
+The bot acts as a **hub**. It handles Telegram and dispatches to local or remote backends. Workers run provider sessions locally on their own machines and exchange messages, files, approvals, and Telegram output over msgspec-based TCP IPC.
 
 ## Project Structure
 
@@ -278,11 +308,13 @@ src/
 
 - **[aiogram 3](https://docs.aiogram.dev/)** — async Telegram bot framework
 - **[Claude Agent SDK](https://docs.anthropic.com/en/docs/claude-code/sdk)** — programmatic Claude Code sessions
+- **[Codex CLI / app-server](https://developers.openai.com/codex/cli)** — Codex-backed sessions
 - **[aiosqlite](https://github.com/omnilib/aiosqlite)** — async SQLite with WAL mode
 - **[uvloop](https://github.com/MagicStack/uvloop)** — high-performance event loop
 - **[pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)** — configuration management
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** — voice transcription
 - **[msgspec](https://github.com/jcrist/msgspec)** — fast binary serialization for IPC
+- **[MCP](https://modelcontextprotocol.io/)** — Telegram output tools and orchestrator tool surface
 
 ## Testing
 
@@ -290,7 +322,7 @@ src/
 pytest
 ```
 
-104 tests covering database operations, IPC protocol, middleware, permissions, routing, and more.
+The suite covers database operations, IPC protocol, middleware, permissions, routing, orchestrator behavior, Codex app-server transport, and remote worker flows.
 
 ## Contributing
 
@@ -317,4 +349,4 @@ If you find this project useful, consider supporting its development:
 
 ---
 
-*Built with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Claude Agent SDK](https://docs.anthropic.com/en/docs/claude-code/sdk)*
+*Built with Claude Code, Codex, aiogram, and a lot of Telegram thread abuse.*
