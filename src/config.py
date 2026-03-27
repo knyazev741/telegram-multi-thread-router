@@ -1,5 +1,8 @@
 """Typed configuration loaded from .env file."""
 
+from typing import Literal
+
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,11 +11,15 @@ class Settings(BaseSettings):
 
     bot_token: str
     owner_user_id: int
-    chat_id: int | None = None  # Auto-detected from first owner message if not set
+    chat_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CHAT_ID", "GROUP_CHAT_ID"),
+    )
     auth_token: str
     ipc_host: str = "0.0.0.0"
     ipc_port: int = 9800
     enable_codex: bool = False
+    default_provider: Literal["claude", "codex"] = "claude"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

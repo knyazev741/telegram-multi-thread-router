@@ -11,10 +11,13 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 
 from src.sessions.backend import (
-    DEFAULT_SESSION_PROVIDER,
     SUPPORTED_SESSION_PROVIDERS,
+    get_default_session_provider,
     is_supported_provider,
     normalize_provider,
+    normalize_server_name,
+    resolve_workdir_for_server,
+    validate_workdir_for_server,
 )
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionCallback, PermissionManager
@@ -61,21 +64,21 @@ def _parse_new_command_args(text: str) -> tuple[str, str, str, str] | None:
     name = args[1]
     workdir = args[2]
     server_name = "local"
-    provider = DEFAULT_SESSION_PROVIDER
+    provider = get_default_session_provider()
 
     for extra in args[3:]:
         if extra.startswith("server="):
             server_name = extra.split("=", 1)[1] or "local"
             continue
         if extra.startswith("provider="):
-            provider = extra.split("=", 1)[1] or DEFAULT_SESSION_PROVIDER
+            provider = extra.split("=", 1)[1] or get_default_session_provider()
             continue
         if extra in SUPPORTED_SESSION_PROVIDERS:
             provider = extra
             continue
         server_name = extra
 
-    return name, workdir, server_name, provider
+    return name, workdir, normalize_server_name(server_name), provider
 
 
 def _default_model_for_provider(provider: str) -> str | None:
@@ -206,6 +209,11 @@ async def handle_new(
         return
 
     name, workdir, server_name, provider = parsed
+    workdir = resolve_workdir_for_server(server_name, workdir)
+    validation_error = validate_workdir_for_server(server_name, workdir)
+    if validation_error:
+        await message.reply(validation_error)
+        return
 
     if not is_supported_provider(provider):
         await message.reply(
@@ -443,10 +451,26 @@ async def handle_photo(message: Message, session_manager: SessionManager) -> Non
         image_data = buf.getvalue()
         caption = message.caption or ""
 
+        logger.info(
+            "Photo received in topic %d (%d bytes, remote=%s)",
+            thread_id,
+            len(image_data),
+            isinstance(runner, RemoteSession),
+        )
+
         await _react(message, "👀")
 
-        # Use enqueue_image if available (local sessions), fall back to text path for remote
-        if hasattr(runner, "enqueue_image"):
+        if isinstance(runner, RemoteSession):
+            logger.info("Forwarding photo from topic %d to worker %s", thread_id, runner.worker_id)
+            await runner.enqueue_file(
+                file_name=f"photo_{photo.file_unique_id}.jpg",
+                file_bytes=image_data,
+                caption=caption,
+                media_type="image/jpeg",
+                reply_to_message_id=message.message_id,
+                is_image=True,
+            )
+        elif hasattr(runner, "enqueue_image"):
             await runner.enqueue_image(
                 image_data=image_data,
                 media_type="image/jpeg",
@@ -454,7 +478,6 @@ async def handle_photo(message: Message, session_manager: SessionManager) -> Non
                 reply_to_message_id=message.message_id,
             )
         else:
-            # Remote session — save to workdir and send path
             dest = Path(runner.workdir) / f"photo_{photo.file_unique_id}.jpg"
             dest.write_bytes(image_data)
             enqueue_text = f"User sent a photo: {dest}\n{caption}".strip()
@@ -485,13 +508,29 @@ async def handle_document(message: Message, session_manager: SessionManager) -> 
 
     try:
         filename = message.document.file_name or f"file_{message.document.file_unique_id}"
-        dest = Path(runner.workdir) / filename
-        await message.bot.download(file=message.document.file_id, destination=str(dest))
         caption = message.caption or ""
-        enqueue_text = f"User sent file: {filename} at {dest}\n{caption}".strip()
+        from io import BytesIO
+
+        buf = BytesIO()
+        await message.bot.download(file=message.document.file_id, destination=buf)
+        file_bytes = buf.getvalue()
+        caption = message.caption or ""
         # 👀 = enqueued to Claude session
         await _react(message, "👀")
-        await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
+        if isinstance(runner, RemoteSession):
+            await runner.enqueue_file(
+                file_name=filename,
+                file_bytes=file_bytes,
+                caption=caption,
+                media_type=message.document.mime_type,
+                reply_to_message_id=message.message_id,
+                is_image=False,
+            )
+        else:
+            dest = Path(runner.workdir) / filename
+            dest.write_bytes(file_bytes)
+            enqueue_text = f"User sent file: {filename} at {dest}\n{caption}".strip()
+            await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
     except ConnectionError as e:
         await message.reply(str(e))
     except Exception as e:
@@ -526,7 +565,7 @@ async def handle_list_in_session(
         else:
             server = "local"
             status = ""
-        provider = getattr(runner, "provider", DEFAULT_SESSION_PROVIDER)
+            provider = getattr(runner, "provider", get_default_session_provider())
         server_info = f"on <i>{server}</i> {status}".strip()
         auto = " 🤖auto" if getattr(runner, "auto_mode", False) else ""
         lines.append(

@@ -7,9 +7,9 @@ from typing import Optional
 from aiogram import Bot
 
 from src.sessions.backend import (
-    DEFAULT_SESSION_PROVIDER,
     SessionBackend,
     SessionProvider,
+    load_repo_local_instructions,
     normalize_provider,
 )
 from src.sessions.codex_runner import CodexRunner
@@ -39,7 +39,7 @@ class SessionManager:
         session_id: str | None = None,
         backend_session_id: str | None = None,
         model: str | None = None,
-        provider: str = DEFAULT_SESSION_PROVIDER,
+        provider: str | None = None,
     ) -> SessionBackend:
         """Create and start a new SessionRunner for the given thread_id.
 
@@ -56,8 +56,11 @@ class SessionManager:
                     workdir=workdir,
                     bot=bot,
                     chat_id=chat_id,
+                    permission_manager=permission_manager,
+                    question_manager=self._question_manager,
                     backend_session_id=backend_session_id,
                     model=model,
+                    base_instructions=load_repo_local_instructions(workdir),
                 )
             else:
                 runner = SessionRunner(
@@ -83,7 +86,7 @@ class SessionManager:
         session_id: str | None = None,
         backend_session_id: str | None = None,
         model: str | None = None,
-        provider: str = DEFAULT_SESSION_PROVIDER,
+        provider: str | None = None,
         provider_options: dict | None = None,
     ) -> RemoteSession:
         """Create a RemoteSession proxy and send StartSessionMsg to the worker.

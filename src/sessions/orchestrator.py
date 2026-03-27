@@ -1,6 +1,7 @@
-"""Orchestrator — auto-created Claude Code session (Sonnet) that manages other sessions."""
+"""Orchestrator session that manages other Telegram provider sessions."""
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 
@@ -10,10 +11,15 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from src.config import settings
 from src.sessions.backend import (
-    DEFAULT_SESSION_PROVIDER,
     SUPPORTED_SESSION_PROVIDERS,
+    get_default_session_provider,
+    get_orchestrator_server_guidance,
     is_supported_provider,
+    load_private_infra_context,
     normalize_provider,
+    normalize_server_name,
+    resolve_workdir_for_server,
+    validate_workdir_for_server,
 )
 from src.db.queries import insert_session, insert_topic, get_all_active_sessions
 from src.sessions.manager import SessionManager
@@ -22,21 +28,12 @@ from src.sessions.permissions import PermissionManager
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_TOPIC_NAME = "🎯 Orchestrator"
-ORCHESTRATOR_SYSTEM_PROMPT = """You are a full Claude Code session with additional session management capabilities.
-
-You have all standard Claude Code tools (Bash, Read, Write, Edit, Grep, Glob, etc.) plus orchestrator MCP tools:
-- create_session(name, workdir, server, provider): Create a new session in a new Telegram thread. Provider defaults to "claude" and can also be "codex" when enabled. Server defaults to "local", or specify a remote worker name.
-- list_sessions(): List all active sessions with status
-- stop_session(thread_id): Stop a session
-
-You can SSH into servers, browse filesystems, run commands — everything a normal Claude Code session can do.
-When the user asks to work on a project on a specific server, use create_session to spawn a dedicated session for it.
-"""
+_ORCHESTRATOR_FALLBACK_LOCKS: dict[int, asyncio.Lock] = {}
 
 WELCOME_MESSAGE = """\
 <b>🎯 Telegram Multi-Thread Router</b>
 
-Claude Code sessions in Telegram — each thread is an isolated workspace.
+Provider sessions in Telegram — each thread is an isolated workspace.
 
 <b>Commands (work from any thread):</b>
 <code>/new &lt;name&gt; &lt;workdir&gt; [server] [provider]</code> — create a new session
@@ -55,6 +52,70 @@ I can create, manage, and stop sessions for you. Just ask in natural language!
 """
 
 
+def _build_orchestrator_system_prompt(provider: str) -> str:
+    """Return the provider-specific orchestrator prompt."""
+    default_provider = get_default_session_provider()
+    provider_label = "Codex" if provider == "codex" else "Claude Code"
+    private_context = load_private_infra_context()
+    extra_context = f"\n\nPrivate infrastructure context:\n{private_context}" if private_context else ""
+    return (
+        f"You are a full {provider_label} session with additional session management capabilities.\n\n"
+        "You have all standard coding/session tools plus orchestrator MCP tools:\n"
+        f"- create_session(name, workdir, server, provider): Create a new session in a new Telegram thread. "
+        f"Provider defaults to \"{default_provider}\" and can also be one of: "
+        f"{', '.join(SUPPORTED_SESSION_PROVIDERS)}.\n"
+        "- list_sessions(): List all active sessions with status\n"
+        "- stop_session(thread_id): Stop a session\n"
+        "- auto_mode(thread_id, enable): Toggle auto-approvals for a session\n\n"
+        "You can browse filesystems, run commands, inspect projects, and manage sessions. "
+        "When the user asks to work on a project on a specific server, use create_session to spawn "
+        "a dedicated session for it.\n"
+        "Critical path rules:\n"
+        "- Never pass a macOS /Users/... path to a remote server session.\n"
+        "- If the target server is remote and the user names a repo rather than an absolute server path, "
+        "resolve the server path first.\n"
+        "- If you know both local and server paths for a repo, use the server path on remote workers.\n\n"
+        f"{get_orchestrator_server_guidance()}"
+        f"{extra_context}"
+    )
+
+
+def _orchestrator_model_for_provider(provider: str) -> str | None:
+    """Return the default orchestrator model for the provider."""
+    if provider == "codex":
+        return None
+    return "sonnet"
+
+
+def _orchestrator_provider_candidates(preferred: str | None) -> list[str]:
+    """Return startup/fallback candidates in priority order."""
+    primary = normalize_provider(preferred or get_default_session_provider())
+    ordered = [primary]
+    if primary != "claude":
+        ordered.append("claude")
+    if primary != "codex" and settings.enable_codex:
+        ordered.append("codex")
+    elif primary == "codex":
+        ordered.append("claude")
+
+    candidates: list[str] = []
+    for provider in ordered:
+        if provider == "codex" and not settings.enable_codex:
+            continue
+        if provider not in candidates:
+            candidates.append(provider)
+    return candidates
+
+
+def _orchestrator_fallback_lock(thread_id: int) -> asyncio.Lock:
+    """Return a stable per-thread fallback lock."""
+    lock = _ORCHESTRATOR_FALLBACK_LOCKS.get(thread_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ORCHESTRATOR_FALLBACK_LOCKS[thread_id] = lock
+    return lock
+
+
 def create_orchestrator_mcp_server(
     bot: Bot,
     chat_id: int,
@@ -64,30 +125,28 @@ def create_orchestrator_mcp_server(
 ):
     """Create MCP server with session management tools for the orchestrator."""
 
-    def _default_model_for_provider(provider: str) -> str | None:
-        if provider == "codex":
-            return None
-        return "opus"
-
     @tool(
         "create_session",
         "Create a new session in a new Telegram thread. Returns the thread ID. "
-        "Provider defaults to 'claude' and may be 'codex' when enabled. "
+        f"Provider defaults to '{get_default_session_provider()}' and may be 'codex' when enabled. "
         "Model: 'opus' (default), 'sonnet', 'haiku', or full name like 'claude-sonnet-4-6'.",
         {"name": str, "workdir": str, "server": str, "provider": str, "model": str},
     )
     async def create_session(args: dict) -> dict:
         name = args["name"]
-        workdir = args["workdir"]
-        server_name = args.get("server", "local")
-        raw_provider = args.get("provider", DEFAULT_SESSION_PROVIDER)
+        server_name = normalize_server_name(args.get("server", "local"))
+        workdir = resolve_workdir_for_server(server_name, args["workdir"])
+        raw_provider = args.get("provider") or get_default_session_provider()
         model = args.get("model")
 
         if not is_supported_provider(raw_provider):
             return {"content": [{"type": "text", "text": f"Error: Unsupported provider '{raw_provider}'"}]}
         provider = normalize_provider(raw_provider)
+        validation_error = validate_workdir_for_server(server_name, workdir)
+        if validation_error:
+            return {"content": [{"type": "text", "text": f"Error: {validation_error}"}]}
         if model in (None, "", "default"):
-            model = _default_model_for_provider(provider)
+            model = _orchestrator_model_for_provider(provider)
         elif provider == "codex" and model == "opus":
             model = None
 
@@ -163,7 +222,7 @@ def create_orchestrator_mcp_server(
 
     @tool(
         "list_sessions",
-        "List all active Claude Code sessions with their status, server, and working directory",
+        "List all active sessions with their status, server, provider, and working directory",
         {},
     )
     async def list_sessions(args: dict) -> dict:
@@ -176,7 +235,7 @@ def create_orchestrator_mcp_server(
         lines = []
         for thread_id, runner in sessions:
             server = runner.worker_id if isinstance(runner, RemoteSession) else "local"
-            provider = getattr(runner, "provider", DEFAULT_SESSION_PROVIDER)
+            provider = getattr(runner, "provider", get_default_session_provider())
             lines.append(
                 f"- Thread {thread_id}: {runner.workdir} [{runner.state.name}] "
                 f"provider={provider} on {server}"
@@ -186,7 +245,7 @@ def create_orchestrator_mcp_server(
 
     @tool(
         "stop_session",
-        "Stop an active Claude Code session by its thread ID",
+        "Stop an active session by its thread ID",
         {"thread_id": int},
     )
     async def stop_session(args: dict) -> dict:
@@ -240,18 +299,291 @@ def create_orchestrator_mcp_server(
     )
 
 
+async def _wait_for_orchestrator_startup(runner, provider: str) -> None:
+    """Wait briefly to catch immediate startup failure before declaring success."""
+    for _ in range(30):
+        if not runner.is_alive or runner.state.name == "STOPPED":
+            raise RuntimeError(f"{provider} orchestrator stopped during startup")
+        if provider != "codex" or getattr(runner, "backend_session_id", None):
+            return
+        await asyncio.sleep(0.1)
+    if provider == "codex":
+        raise RuntimeError("codex orchestrator did not obtain a backend thread id during startup")
+
+
+def _build_orchestrator_runner(
+    *,
+    provider: str,
+    thread_id: int,
+    chat_id: int,
+    bot: Bot,
+    session_manager: SessionManager,
+    permission_manager: PermissionManager,
+    question_manager,
+    worker_registry,
+    model: str | None,
+    session_id: str | None,
+    backend_session_id: str | None,
+    orchestrator_mcp_url: str | None,
+):
+    """Build a provider-specific orchestrator runner without starting it."""
+    from src.sessions.codex_runner import CodexRunner
+    from src.sessions.runner import SessionRunner
+
+    orch_mcp = create_orchestrator_mcp_server(
+        bot,
+        chat_id,
+        session_manager,
+        permission_manager,
+        worker_registry,
+    )
+
+    if provider == "codex":
+        if not settings.enable_codex:
+            raise RuntimeError("Codex is disabled but configured as the orchestrator provider")
+        if not orchestrator_mcp_url:
+            raise RuntimeError("Codex orchestrator MCP server URL is missing")
+        return CodexRunner(
+            thread_id=thread_id,
+            workdir=str(Path.home()),
+            bot=bot,
+            chat_id=chat_id,
+            permission_manager=permission_manager,
+            question_manager=question_manager,
+            backend_session_id=backend_session_id or session_id,
+            model=model,
+            developer_instructions=_build_orchestrator_system_prompt(provider),
+            mcp_server_urls={"orchestrator": orchestrator_mcp_url},
+        )
+
+    runner = SessionRunner(
+        thread_id=thread_id,
+        workdir=str(Path.home()),
+        bot=bot,
+        chat_id=chat_id,
+        permission_manager=permission_manager,
+        question_manager=question_manager,
+        model=model,
+        session_id=session_id,
+    )
+    runner._extra_mcp = {"orchestrator": orch_mcp}
+    runner._system_prompt_override = _build_orchestrator_system_prompt(provider)
+    return runner
+
+
+async def _start_orchestrator_runner(
+    *,
+    provider: str,
+    thread_id: int,
+    chat_id: int,
+    bot: Bot,
+    session_manager: SessionManager,
+    permission_manager: PermissionManager,
+    question_manager,
+    worker_registry,
+    model: str | None,
+    session_id: str | None,
+    backend_session_id: str | None,
+    orchestrator_mcp_url: str | None,
+):
+    """Create, register, start, and validate an orchestrator runner."""
+    runner = _build_orchestrator_runner(
+        provider=provider,
+        thread_id=thread_id,
+        chat_id=chat_id,
+        bot=bot,
+        session_manager=session_manager,
+        permission_manager=permission_manager,
+        question_manager=question_manager,
+        worker_registry=worker_registry,
+        model=model,
+        session_id=session_id,
+        backend_session_id=backend_session_id,
+        orchestrator_mcp_url=orchestrator_mcp_url,
+    )
+
+    async with session_manager._lock:
+        session_manager._sessions[thread_id] = runner
+    try:
+        await runner.start()
+        await _wait_for_orchestrator_startup(runner, provider)
+        return runner
+    except Exception:
+        async with session_manager._lock:
+            if session_manager._sessions.get(thread_id) is runner:
+                session_manager._sessions.pop(thread_id, None)
+        with contextlib.suppress(Exception):
+            await runner.stop()
+        raise
+
+
+def _attach_orchestrator_fallback(
+    *,
+    runner,
+    thread_id: int,
+    current_provider: str,
+    bot: Bot,
+    chat_id: int,
+    session_manager: SessionManager,
+    permission_manager: PermissionManager,
+    question_manager,
+    worker_registry,
+    orchestrator_mcp_url: str | None,
+) -> None:
+    """Attach a runtime fallback callback to the active orchestrator runner."""
+
+    async def _on_provider_exhausted(reason: str) -> None:
+        await _fallback_orchestrator_provider(
+            thread_id=thread_id,
+            current_provider=current_provider,
+            reason=reason,
+            bot=bot,
+            chat_id=chat_id,
+            session_manager=session_manager,
+            permission_manager=permission_manager,
+            question_manager=question_manager,
+            worker_registry=worker_registry,
+            orchestrator_mcp_url=orchestrator_mcp_url,
+        )
+
+    runner._provider_exhausted_callback = _on_provider_exhausted
+
+
+async def _fallback_orchestrator_provider(
+    *,
+    thread_id: int,
+    current_provider: str,
+    reason: str,
+    bot: Bot,
+    chat_id: int,
+    session_manager: SessionManager,
+    permission_manager: PermissionManager,
+    question_manager,
+    worker_registry,
+    orchestrator_mcp_url: str | None,
+) -> bool:
+    """Switch the orchestrator thread to another enabled provider."""
+    from src.db.queries import update_session_provider
+
+    lock = _orchestrator_fallback_lock(thread_id)
+    async with lock:
+        active = session_manager.get(thread_id)
+        if active is None or getattr(active, "provider", None) != current_provider:
+            return False
+
+        fallback_candidates = [
+            provider
+            for provider in _orchestrator_provider_candidates(current_provider)
+            if provider != current_provider
+        ]
+        if not fallback_candidates:
+            await bot.send_message(
+                chat_id=chat_id,
+                message_thread_id=thread_id,
+                text=(
+                    f"⚠️ Orchestrator provider <code>{current_provider}</code> became unavailable.\n"
+                    "No fallback provider is available."
+                ),
+                parse_mode="HTML",
+            )
+            return False
+
+        async with session_manager._lock:
+            old_runner = session_manager._sessions.pop(thread_id, None)
+        if old_runner is not None:
+            with contextlib.suppress(Exception):
+                await old_runner.stop()
+
+        for fallback_provider in fallback_candidates:
+            fallback_model = _orchestrator_model_for_provider(fallback_provider)
+            await update_session_provider(thread_id, fallback_provider, fallback_model)
+            try:
+                new_runner = await _start_orchestrator_runner(
+                    provider=fallback_provider,
+                    thread_id=thread_id,
+                    chat_id=chat_id,
+                    bot=bot,
+                    session_manager=session_manager,
+                    permission_manager=permission_manager,
+                    question_manager=question_manager,
+                    worker_registry=worker_registry,
+                    model=fallback_model,
+                    session_id=None,
+                    backend_session_id=None,
+                    orchestrator_mcp_url=orchestrator_mcp_url,
+                )
+                _attach_orchestrator_fallback(
+                    runner=new_runner,
+                    thread_id=thread_id,
+                    current_provider=fallback_provider,
+                    bot=bot,
+                    chat_id=chat_id,
+                    session_manager=session_manager,
+                    permission_manager=permission_manager,
+                    question_manager=question_manager,
+                    worker_registry=worker_registry,
+                    orchestrator_mcp_url=orchestrator_mcp_url,
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=thread_id,
+                    text=(
+                        "⚠️ Orchestrator provider fallback activated.\n"
+                        f"From: <code>{current_provider}</code>\n"
+                        f"To: <code>{fallback_provider}</code>\n"
+                        f"Reason: {reason}"
+                    ),
+                    parse_mode="HTML",
+                )
+                logger.warning(
+                    "Orchestrator provider fallback: %s -> %s (%s)",
+                    current_provider,
+                    fallback_provider,
+                    reason,
+                )
+                return True
+            except Exception as e:
+                logger.error(
+                    "Failed to switch orchestrator from %s to %s: %s",
+                    current_provider,
+                    fallback_provider,
+                    e,
+                )
+
+        await bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            text=(
+                f"❌ Orchestrator provider <code>{current_provider}</code> failed.\n"
+                f"Reason: {reason}\n"
+                "Fallback providers could not be started."
+            ),
+            parse_mode="HTML",
+        )
+        return False
+
+
 async def ensure_orchestrator(
     bot: Bot,
     chat_id: int,
     session_manager: SessionManager,
     permission_manager: PermissionManager,
+    question_manager,
     worker_registry,
+    orchestrator_mcp_url: str | None = None,
 ) -> int | None:
     """Ensure the orchestrator thread and session exist. Returns thread_id or None on error."""
-    from src.db.queries import get_orchestrator_topic, insert_topic, insert_session
+    from src.db.queries import (
+        get_orchestrator_topic,
+        get_session_by_thread,
+        insert_topic,
+        insert_session,
+        update_session_provider,
+    )
 
     # Check if orchestrator topic already exists in DB
     orch = await get_orchestrator_topic()
+    preferred_provider = get_default_session_provider()
     if orch:
         thread_id = orch["thread_id"]
         logger.info("Orchestrator topic exists: thread=%d", thread_id)
@@ -261,7 +593,13 @@ async def ensure_orchestrator(
             topic = await bot(CreateForumTopic(chat_id=chat_id, name=ORCHESTRATOR_TOPIC_NAME))
             thread_id = topic.message_thread_id
             await insert_topic(thread_id, ORCHESTRATOR_TOPIC_NAME, is_orchestrator=True)
-            await insert_session(thread_id, str(Path.home()), server="local")
+            await insert_session(
+                thread_id,
+                str(Path.home()),
+                model=_orchestrator_model_for_provider(preferred_provider),
+                server="local",
+                provider=preferred_provider,
+            )
             await bot.send_message(
                 chat_id=chat_id,
                 message_thread_id=thread_id,
@@ -278,50 +616,78 @@ async def ensure_orchestrator(
         logger.info("Orchestrator session already running")
         return thread_id
 
+    existing = await get_session_by_thread(thread_id)
+    persisted_provider = normalize_provider(existing.get("provider") if existing else preferred_provider)
+    preferred_provider = persisted_provider
+    session_id = existing["session_id"] if existing else None
+    backend_session_id = existing.get("backend_session_id") if existing else None
+
     try:
-        from src.sessions.runner import SessionRunner
-        from src.db.queries import get_session_by_thread
-
-        # Get existing session_id for resume (if orchestrator was running before)
-        existing = await get_session_by_thread(thread_id)
-        session_id = existing["session_id"] if existing else None
-
-        # Create orchestrator with management MCP tools
-        orch_mcp = create_orchestrator_mcp_server(
-            bot, chat_id, session_manager, permission_manager, worker_registry,
-        )
-
-        # Build runner manually so we can set _extra_mcp BEFORE start()
-        runner = SessionRunner(
-            thread_id=thread_id,
-            workdir=str(Path.home()),
-            bot=bot,
-            chat_id=chat_id,
-            permission_manager=permission_manager,
-            model="sonnet",
-            session_id=session_id,
-        )
-        runner._extra_mcp = {"orchestrator": orch_mcp}
-        runner._system_prompt_override = ORCHESTRATOR_SYSTEM_PROMPT
-
-        # Register in session manager and start
-        async with session_manager._lock:
-            session_manager._sessions[thread_id] = runner
-        await runner.start()
-
-        # Send welcome on first creation, short status on restart
-        if not orch:
-            # First time — full welcome already sent above
-            pass
-        else:
-            await bot.send_message(
-                chat_id=chat_id,
-                message_thread_id=thread_id,
-                text="🎯 Orchestrator restarted and ready.",
+        startup_errors: list[str] = []
+        for provider in _orchestrator_provider_candidates(preferred_provider):
+            model = (
+                existing.get("model")
+                if existing and provider == persisted_provider
+                else _orchestrator_model_for_provider(provider)
             )
+            try:
+                if provider != persisted_provider:
+                    await update_session_provider(thread_id, provider, model)
+                runner = await _start_orchestrator_runner(
+                    provider=provider,
+                    thread_id=thread_id,
+                    chat_id=chat_id,
+                    bot=bot,
+                    session_manager=session_manager,
+                    permission_manager=permission_manager,
+                    question_manager=question_manager,
+                    worker_registry=worker_registry,
+                    model=model,
+                    session_id=session_id if provider == persisted_provider else None,
+                    backend_session_id=backend_session_id if provider == persisted_provider else None,
+                    orchestrator_mcp_url=orchestrator_mcp_url,
+                )
+                _attach_orchestrator_fallback(
+                    runner=runner,
+                    thread_id=thread_id,
+                    current_provider=provider,
+                    bot=bot,
+                    chat_id=chat_id,
+                    session_manager=session_manager,
+                    permission_manager=permission_manager,
+                    question_manager=question_manager,
+                    worker_registry=worker_registry,
+                    orchestrator_mcp_url=orchestrator_mcp_url,
+                )
+                if orch:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        message_thread_id=thread_id,
+                        text=(
+                            "🎯 Orchestrator restarted and ready.\n"
+                            f"Provider: <code>{provider}</code>"
+                        ),
+                        parse_mode="HTML",
+                    )
+                logger.info(
+                    "Orchestrator session started in thread %d with provider %s",
+                    thread_id,
+                    provider,
+                )
+                return thread_id
+            except Exception as e:
+                logger.error("Failed to start orchestrator on %s: %s", provider, e)
+                startup_errors.append(f"{provider}: {e}")
 
-        logger.info("Orchestrator session started in thread %d", thread_id)
-        return thread_id
+        await bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            text=(
+                "❌ Failed to start orchestrator on all available providers.\n"
+                + "\n".join(startup_errors[-2:])
+            ),
+        )
+        return None
     except Exception as e:
         logger.error("Failed to start orchestrator session: %s", e)
         return None

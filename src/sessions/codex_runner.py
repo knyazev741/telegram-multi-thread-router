@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import json
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
@@ -20,7 +22,7 @@ from src.db.queries import (
     update_session_model,
     update_session_state,
 )
-from src.sessions.backend import SessionProvider
+from src.sessions.backend import SessionProvider, looks_like_provider_limit_error
 from src.sessions.codex_app_server import (
     CodexAppServerClient,
     CodexAppServerError,
@@ -43,6 +45,7 @@ from src.sessions.questions import (
     format_question_message,
 )
 from src.sessions.state import SessionState
+from src.sessions.telegram_output_mcp import LocalTelegramOutputMcpServer
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,7 @@ class _QueueItem:
     """A queued user message with optional reply tracking."""
 
     text: str | None
+    input_items: list[dict[str, Any]] | None = None
     reply_to_message_id: int | None = None
 
 
@@ -66,10 +70,13 @@ class CodexRunner:
         workdir: str,
         bot: Bot,
         chat_id: int,
-        permission_manager: PermissionManager,
+        permission_manager: PermissionManager | None = None,
         question_manager: QuestionManager | None = None,
         backend_session_id: str | None = None,
         model: str | None = None,
+        base_instructions: str | None = None,
+        developer_instructions: str | None = None,
+        mcp_server_urls: dict[str, str] | None = None,
     ) -> None:
         self.thread_id = thread_id
         self.workdir = str(Path(workdir).expanduser())
@@ -81,8 +88,13 @@ class CodexRunner:
 
         self._bot = bot
         self._chat_id = chat_id
-        self._permission_manager = permission_manager
+        self._permission_manager = permission_manager or PermissionManager()
         self._question_manager = question_manager
+        self._base_instructions = base_instructions
+        self._developer_instructions = developer_instructions
+        self._mcp_server_urls = mcp_server_urls or {}
+        self._telegram_mcp_server: LocalTelegramOutputMcpServer | None = None
+        self._telegram_mcp_url: str | None = None
         self._message_queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._inject_task: asyncio.Task | None = None
@@ -95,28 +107,58 @@ class CodexRunner:
         self._active_user_wait: asyncio.Future | None = None
         self._active_user_wait_cancel_value: str | dict[str, Any] | None = None
         self._agent_message_buffers: dict[str, str] = {}
+        self._provider_exhausted_callback: Callable[[str], Awaitable[None]] | None = None
+        self._provider_exhausted_notified = False
+
+    def _build_config_overrides(self) -> list[str]:
+        """Return codex CLI config overrides for this runner."""
+        mcp_urls = dict(self._mcp_server_urls)
+        if self._telegram_mcp_url and "telegram" not in mcp_urls:
+            mcp_urls["telegram"] = self._telegram_mcp_url
+        overrides: list[str] = []
+        for name, url in sorted(mcp_urls.items()):
+            overrides.append(f"mcp_servers.{name}.url={json.dumps(url)}")
+        return overrides
 
     async def start(self) -> None:
         """Launch the runner task."""
         self._task = asyncio.create_task(self._run())
 
+    def _schedule_provider_exhausted(self, reason: str) -> None:
+        """Notify the orchestrator supervisor once when this provider is exhausted."""
+        if self._provider_exhausted_notified or self._provider_exhausted_callback is None:
+            return
+        self._provider_exhausted_notified = True
+        asyncio.create_task(self._provider_exhausted_callback(reason))
+
     async def _run(self) -> None:
         """Start app-server, ensure thread exists, then process queued turns."""
         try:
-            self._client = CodexAppServerClient(cwd=self.workdir)
+            if "telegram" not in self._mcp_server_urls:
+                self._telegram_mcp_server = LocalTelegramOutputMcpServer(
+                    self._bot,
+                    self._chat_id,
+                    self.thread_id,
+                )
+                self._telegram_mcp_url = await self._telegram_mcp_server.start()
+            self._client = CodexAppServerClient(
+                cwd=self.workdir,
+                config_overrides=self._build_config_overrides(),
+            )
             await self._client.start()
             await self._ensure_thread()
             self._inject_task = asyncio.create_task(self._inject_loop())
 
             while self.state != SessionState.STOPPED:
                 item = await self._message_queue.get()
-                if item.text is None:
+                if item.text is None and item.input_items is None:
                     break
 
-                if await self._handle_compat_command(item.text):
+                if item.input_items is None and item.text is not None and await self._handle_compat_command(item.text):
                     continue
 
                 self.state = SessionState.RUNNING
+                await update_session_state(self.thread_id, "running")
                 self._interrupted = False
                 self._current_reply_to = item.reply_to_message_id
                 self._status = StatusUpdater(
@@ -131,7 +173,7 @@ class CodexRunner:
                 await self._typing.start()
 
                 try:
-                    await self._run_turn(item.text)
+                    await self._run_turn(prompt=item.text, input_items=item.input_items)
                 finally:
                     if self._typing:
                         await self._typing.stop()
@@ -149,6 +191,8 @@ class CodexRunner:
         except Exception as e:
             logger.error("Codex session error for thread %d: %s", self.thread_id, e)
             self.state = SessionState.STOPPED
+            if looks_like_provider_limit_error(str(e)):
+                self._schedule_provider_exhausted(str(e))
             if self._typing:
                 await self._typing.stop()
                 self._typing = None
@@ -172,6 +216,10 @@ class CodexRunner:
             if self._client:
                 await self._client.close()
                 self._client = None
+            if self._telegram_mcp_server:
+                await self._telegram_mcp_server.stop()
+                self._telegram_mcp_server = None
+            self._telegram_mcp_url = None
 
     async def _ensure_thread(self, *, force_new: bool = False) -> None:
         """Start or resume the persistent Codex thread for this Telegram topic."""
@@ -184,6 +232,10 @@ class CodexRunner:
             "approvalsReviewer": "user",
             "personality": "pragmatic",
         }
+        if self._base_instructions:
+            params["baseInstructions"] = self._base_instructions
+        if self._developer_instructions:
+            params["developerInstructions"] = self._developer_instructions
         if self.model:
             params["model"] = self.model
 
@@ -206,7 +258,11 @@ class CodexRunner:
 
         await self._drain_non_turn_messages()
 
-    async def _run_turn(self, prompt: str) -> None:
+    async def _run_turn(
+        self,
+        prompt: str | None = None,
+        input_items: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Start one Codex turn and process notifications until completion."""
         if self._client is None:
             raise CodexAppServerError("Codex app-server client is not ready")
@@ -215,11 +271,16 @@ class CodexRunner:
         if self.backend_session_id is None:
             raise CodexAppServerError("Codex thread id is missing")
 
+        if input_items is None:
+            if prompt is None:
+                raise CodexAppServerError("Codex turn input is missing")
+            input_items = [{"type": "text", "text": prompt}]
+
         result = await self._client.request(
             TURN_START_METHOD,
             {
                 "threadId": self.backend_session_id,
-                "input": [{"type": "text", "text": prompt}],
+                "input": input_items,
                 "cwd": self.workdir,
                 "approvalPolicy": "on-request",
                 "approvalsReviewer": "user",
@@ -318,6 +379,8 @@ class CodexRunner:
                 error = completed_turn.get("error")
                 if status_value == "failed" and error:
                     message = error.get("message") if isinstance(error, dict) else str(error)
+                    if looks_like_provider_limit_error(message):
+                        self._schedule_provider_exhausted(message)
                     await self._bot.send_message(
                         chat_id=self._chat_id,
                         message_thread_id=self.thread_id,
@@ -339,11 +402,11 @@ class CodexRunner:
                     await asyncio.sleep(0.1)
                     continue
 
-                if item.text is None:
+                if item.text is None and item.input_items is None:
                     await self._message_queue.put(item)
                     break
 
-                if item.text.startswith("/"):
+                if item.input_items is None and item.text and item.text.startswith("/"):
                     await self._message_queue.put(item)
                     await asyncio.sleep(0.1)
                     continue
@@ -356,7 +419,7 @@ class CodexRunner:
                         {
                             "threadId": self.backend_session_id,
                             "expectedTurnId": self._current_turn_id,
-                            "input": [{"type": "text", "text": item.text}],
+                            "input": item.input_items or [{"type": "text", "text": item.text}],
                         },
                     )
                 except Exception as e:
@@ -397,6 +460,8 @@ class CodexRunner:
             return {"decision": "accept"}
 
         tool_name = "Bash" if "commandExecution" in method else "Edit"
+        if self._permission_manager.is_globally_allowed(tool_name):
+            return {"decision": "acceptForSession"}
         input_data = {
             "command": params.get("command", ""),
             "file_path": params.get("grantRoot", ""),
@@ -430,6 +495,7 @@ class CodexRunner:
             self._active_user_wait_cancel_value = None
 
         if action == "always":
+            await self._permission_manager.allow_globally(tool_name)
             return {"decision": "acceptForSession"}
         if action == "allow":
             return {"decision": "accept"}
@@ -439,6 +505,8 @@ class CodexRunner:
         """Bridge a `request_permissions` request into Telegram approvals."""
         permissions = params.get("permissions", {})
         if self.auto_mode:
+            return {"scope": "session", "permissions": permissions}
+        if self._permission_manager.is_globally_allowed("request_permissions"):
             return {"scope": "session", "permissions": permissions}
 
         request_id, future = self._permission_manager.create_request()
@@ -467,6 +535,8 @@ class CodexRunner:
             self._active_user_wait_cancel_value = None
 
         if action in {"allow", "always"}:
+            if action == "always":
+                await self._permission_manager.allow_globally("request_permissions")
             return {
                 "scope": "session" if action == "always" else "turn",
                 "permissions": permissions,
@@ -681,7 +751,31 @@ class CodexRunner:
     async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
         """Queue a prompt for the next or active Codex turn."""
         await self._message_queue.put(
-            _QueueItem(text=text, reply_to_message_id=reply_to_message_id)
+            _QueueItem(text=text, input_items=None, reply_to_message_id=reply_to_message_id)
+        )
+
+    async def enqueue_image(
+        self,
+        image_data: bytes,
+        media_type: str = "image/jpeg",
+        caption: str = "",
+        reply_to_message_id: int | None = None,
+    ) -> None:
+        """Queue an image message so Codex sees the image directly."""
+        data_url = f"data:{media_type};base64,{base64.b64encode(image_data).decode()}"
+        input_items: list[dict[str, Any]] = [{"type": "image", "url": data_url}]
+        input_items.append(
+            {
+                "type": "text",
+                "text": caption or "User sent a photo. Describe what you see.",
+            }
+        )
+        await self._message_queue.put(
+            _QueueItem(
+                text=None,
+                input_items=input_items,
+                reply_to_message_id=reply_to_message_id,
+            )
         )
 
     async def interrupt(self) -> bool:
@@ -709,7 +803,7 @@ class CodexRunner:
                     TURN_INTERRUPT_METHOD,
                     {"threadId": self.backend_session_id, "turnId": self._current_turn_id},
                 )
-        await self._message_queue.put(_QueueItem(text=None))
+        await self._message_queue.put(_QueueItem(text=None, input_items=None))
         try:
             await update_session_state(self.thread_id, "stopped")
         except Exception:

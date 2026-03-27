@@ -11,6 +11,8 @@ os.environ.setdefault("BOT_TOKEN", "test-bot-token")
 os.environ.setdefault("OWNER_USER_ID", "12345")
 os.environ.setdefault("CHAT_ID", "-100999")
 os.environ.setdefault("AUTH_TOKEN", "test-auth-token")
+os.environ.setdefault("DEFAULT_PROVIDER", "claude")
+os.environ.setdefault("ENABLE_CODEX", "false")
 
 OWNER_ID = 12345
 CHAT_ID = -100999

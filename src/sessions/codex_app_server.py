@@ -35,14 +35,18 @@ class CodexAppServerClient:
         *,
         cwd: str,
         codex_bin: str | None = None,
+        config_overrides: list[str] | None = None,
         request_timeout: float = 30.0,
+        stream_limit: int = 1024 * 1024,
     ) -> None:
         self.cwd = cwd
         self.codex_bin = codex_bin or shutil.which("codex")
         if not self.codex_bin:
             raise CodexAppServerError("Could not find `codex` binary in PATH")
 
+        self.config_overrides = config_overrides or []
         self.request_timeout = request_timeout
+        self.stream_limit = stream_limit
         self._proc: asyncio.subprocess.Process | None = None
         self._stdout_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
@@ -56,15 +60,18 @@ class CodexAppServerClient:
         if self._proc is not None:
             return
 
+        argv = [self.codex_bin]
+        for override in self.config_overrides:
+            argv.extend(["-c", override])
+        argv.extend(["app-server", "--listen", "stdio://"])
+
         self._proc = await asyncio.create_subprocess_exec(
-            self.codex_bin,
-            "app-server",
-            "--listen",
-            "stdio://",
+            *argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self.cwd,
+            limit=self.stream_limit,
         )
         self._stdout_task = asyncio.create_task(self._read_stdout())
         self._stderr_task = asyncio.create_task(self._read_stderr())

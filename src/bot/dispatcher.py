@@ -71,6 +71,7 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
             manager,
             permission_manager,
             worker_registry,
+            question_manager=question_manager,
         )
         dispatcher["ipc_server"] = ipc_server
     except OSError as e:
@@ -91,10 +92,31 @@ async def on_startup(bot: Bot, dispatcher: Dispatcher) -> None:
         )
         dispatcher["health_task"] = health_task
 
+        orchestrator_mcp_server = None
+        orchestrator_mcp_url = None
+        if settings.enable_codex:
+            from src.sessions.orchestrator_mcp import LocalOrchestratorMcpServer
+
+            orchestrator_mcp_server = LocalOrchestratorMcpServer(
+                bot,
+                settings.chat_id,
+                manager,
+                permission_manager,
+                worker_registry,
+            )
+            orchestrator_mcp_url = await orchestrator_mcp_server.start()
+            dispatcher["orchestrator_mcp_server"] = orchestrator_mcp_server
+
         # Start orchestrator session
         from src.sessions.orchestrator import ensure_orchestrator
         orch_thread = await ensure_orchestrator(
-            bot, settings.chat_id, manager, permission_manager, worker_registry,
+            bot,
+            settings.chat_id,
+            manager,
+            permission_manager,
+            question_manager,
+            worker_registry,
+            orchestrator_mcp_url=orchestrator_mcp_url,
         )
         if orch_thread:
             dispatcher["orchestrator_thread_id"] = orch_thread
@@ -115,6 +137,10 @@ async def on_shutdown(dispatcher: Dispatcher) -> None:
             await health_task
         except asyncio.CancelledError:
             pass
+
+    orchestrator_mcp_server = dispatcher.get("orchestrator_mcp_server")
+    if orchestrator_mcp_server:
+        await orchestrator_mcp_server.stop()
 
     # Close IPC server
     ipc_server: asyncio.Server | None = dispatcher.get("ipc_server")

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from aiogram import Bot
-from aiogram.types import FSInputFile, ReactionTypeEmoji
+from aiogram.types import BufferedInputFile, FSInputFile, ReactionTypeEmoji
 
 from src.config import settings
 from src.ipc.protocol import (
@@ -562,10 +563,23 @@ async def _handle_worker(
 
             elif isinstance(msg, McpSendFileMsg):
                 try:
+                    logger.info(
+                        "McpSendFile for topic %d: %s (%s bytes)",
+                        msg.topic_id,
+                        msg.file_name or Path(msg.file_path).name,
+                        len(msg.file_bytes) if msg.file_bytes is not None else "stream",
+                    )
+                    if msg.file_bytes is not None:
+                        document = BufferedInputFile(
+                            msg.file_bytes,
+                            filename=msg.file_name or Path(msg.file_path).name or "file",
+                        )
+                    else:
+                        document = FSInputFile(msg.file_path)
                     await bot.send_document(
                         chat_id=settings.chat_id,
                         message_thread_id=msg.topic_id,
-                        document=FSInputFile(msg.file_path),
+                        document=document,
                         caption=msg.caption,
                     )
                 except Exception as e:

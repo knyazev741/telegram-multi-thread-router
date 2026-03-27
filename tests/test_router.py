@@ -88,6 +88,36 @@ async def test_handle_new_codex_provider(monkeypatch):
     assert session_manager.create.call_args.kwargs["provider"] == "codex"
 
 
+async def test_handle_new_rewrites_personal_agent_path(monkeypatch):
+    """/new rewrites known Mac repo paths to the server path on personal."""
+    from src.ipc.server import WorkerRegistry
+
+    monkeypatch.setattr("src.bot.routers.session.settings.enable_codex", True)
+    monkeypatch.setattr("src.bot.routers.session.settings.chat_id", -100999)
+    insert_topic = AsyncMock()
+    insert_session = AsyncMock()
+    monkeypatch.setattr("src.bot.routers.session.insert_topic", insert_topic)
+    monkeypatch.setattr("src.bot.routers.session.insert_session", insert_session)
+
+    topic = MagicMock(message_thread_id=88)
+    bot = AsyncMock(return_value=topic)
+    bot.send_message = AsyncMock()
+    msg = _make_message(thread_id=42, text="/new demo /Users/knyaz/agent personal codex")
+    session_manager = MagicMock(spec=SessionManager)
+    session_manager.create_remote = AsyncMock()
+    permission_manager = MagicMock()
+    worker_registry = WorkerRegistry()
+    mock_writer = MagicMock()
+    mock_writer.is_closing.return_value = False
+    mock_writer.drain = AsyncMock()
+    worker_registry.register("personal", mock_writer)
+
+    await handle_new(msg, bot, session_manager, permission_manager, worker_registry)
+
+    assert insert_session.call_args.args[1] == "/root/agent"
+    assert session_manager.create_remote.call_args.kwargs["workdir"] == "/root/agent"
+
+
 # ---------------------------------------------------------------------------
 # /list command
 # ---------------------------------------------------------------------------

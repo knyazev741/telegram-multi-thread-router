@@ -22,6 +22,7 @@ from src.ipc.protocol import (
     StartSessionMsg,
     StatusUpdateMsg,
     StopSessionMsg,
+    UserFileMsg,
     UserMessageMsg,
     WorkerToBot,
     BotToWorker,
@@ -51,7 +52,7 @@ WORKER_TO_BOT_MESSAGES = [
     McpReactMsg(topic_id=8, message_id=10, emoji="👍"),
     McpEditMessageMsg(topic_id=9, message_id=11, text="edited"),
     McpSendFileMsg(topic_id=10, file_path="/tmp/f.txt"),
-    McpSendFileMsg(topic_id=11, file_path="/tmp/f.txt", caption="cap"),
+    McpSendFileMsg(topic_id=11, file_path="/tmp/f.txt", file_name="f.txt", file_bytes=b"abc", caption="cap"),
 ]
 
 BOT_TO_WORKER_MESSAGES = [
@@ -68,6 +69,7 @@ BOT_TO_WORKER_MESSAGES = [
     ),
     StopSessionMsg(topic_id=3),
     UserMessageMsg(topic_id=4, text="hello"),
+    UserFileMsg(topic_id=7, file_name="photo.jpg", file_bytes=b"123", is_image=True),
     PermissionResponseMsg(request_id="r1", action="allow"),
     SlashCommandMsg(topic_id=5, command="/compact"),
 ]

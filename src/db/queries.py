@@ -1,7 +1,7 @@
 """Named SQL query functions for session and topic CRUD."""
 
 from src.db.connection import get_connection
-from src.sessions.backend import DEFAULT_SESSION_PROVIDER, normalize_provider
+from src.sessions.backend import normalize_provider
 
 
 async def insert_topic(thread_id: int, name: str, is_orchestrator: bool = False) -> None:
@@ -29,7 +29,7 @@ async def insert_session(
     workdir: str,
     model: str | None = None,
     server: str = "local",
-    provider: str = DEFAULT_SESSION_PROVIDER,
+    provider: str | None = None,
     backend_session_id: str | None = None,
 ) -> None:
     """Insert a new session record with state='idle'."""
@@ -70,6 +70,18 @@ async def update_session_state(thread_id: int, state: str) -> None:
         await conn.execute(
             "UPDATE sessions SET state=?, updated_at=datetime('now') WHERE thread_id=?",
             (state, thread_id),
+        )
+        await conn.commit()
+
+
+async def update_session_provider(thread_id: int, provider: str, model: str | None = None) -> None:
+    """Update provider/model and clear backend IDs after a provider switch."""
+    provider = normalize_provider(provider)
+    async with get_connection() as conn:
+        await conn.execute(
+            "UPDATE sessions SET provider=?, model=?, session_id=NULL, backend_session_id=NULL, "
+            "state='idle', updated_at=datetime('now') WHERE thread_id=?",
+            (provider, model, thread_id),
         )
         await conn.commit()
 

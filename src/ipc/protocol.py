@@ -122,6 +122,8 @@ class McpSendFileMsg(msgspec.Struct, tag="mcp_send_file"):
     """MCP tool: send a file from the worker's filesystem to the topic."""
     topic_id: int
     file_path: str
+    file_name: str | None = None
+    file_bytes: bytes | None = None
     caption: str | None = None
 
 
@@ -163,6 +165,17 @@ class UserMessageMsg(msgspec.Struct, tag="user_message"):
     topic_id: int
     text: str
     reply_to_message_id: int | None = None
+
+
+class UserFileMsg(msgspec.Struct, tag="user_file"):
+    """User file/photo payload forwarded from bot to worker."""
+    topic_id: int
+    file_name: str
+    file_bytes: bytes
+    caption: str | None = None
+    media_type: str | None = None
+    reply_to_message_id: int | None = None
+    is_image: bool = False
 
 
 class PermissionResponseMsg(msgspec.Struct, tag="permission_response"):
@@ -223,6 +236,7 @@ BotToWorker = Union[
     StopSessionMsg,
     InterruptMsg,
     UserMessageMsg,
+    UserFileMsg,
     PermissionResponseMsg,
     QuestionResponseMsg,
     SlashCommandMsg,

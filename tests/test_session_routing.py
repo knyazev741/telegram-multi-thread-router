@@ -81,6 +81,23 @@ async def test_create_remote_raises_if_duplicate(mock_registry):
         )
 
 
+def test_normalize_server_name_maps_personal_alias():
+    """Known human aliases normalize to the connected worker ID."""
+    from src.sessions.backend import normalize_server_name
+
+    assert normalize_server_name("personal-server") == "personal"
+    assert normalize_server_name("personal") == "personal"
+    assert normalize_server_name("mac") == "local"
+
+
+def test_resolve_workdir_for_personal_maps_agent_repo():
+    """Known local repo paths are rewritten to server paths for remote workers."""
+    from src.sessions.backend import resolve_workdir_for_server
+
+    assert resolve_workdir_for_server("personal", "/Users/knyaz/agent") == "/root/agent"
+    assert resolve_workdir_for_server("personal", "agent") == "/root/agent"
+
+
 # ---------------------------------------------------------------------------
 # MSRV-08: Local default
 # ---------------------------------------------------------------------------
@@ -102,6 +119,32 @@ async def test_local_default(mock_bot, permission_manager):
     assert not isinstance(runner, RemoteSession)
     stored = manager.get(300)
     assert isinstance(stored, SessionRunner)
+
+
+async def test_local_codex_loads_repo_local_instructions(tmp_path, mock_bot, permission_manager):
+    """Local Codex sessions inherit repo-local AGENTS.md/CLAUDE.md instructions."""
+    instructions_path = tmp_path / "AGENTS.md"
+    instructions_path.write_text("local codex instructions")
+
+    manager = SessionManager()
+    fake_runner = MagicMock()
+    fake_runner.start = AsyncMock()
+    codex_ctor = MagicMock(return_value=fake_runner)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.sessions.manager.CodexRunner", codex_ctor)
+        runner = await manager.create(
+            thread_id=301,
+            workdir=str(tmp_path),
+            bot=mock_bot,
+            chat_id=-100999,
+            permission_manager=permission_manager,
+            provider="codex",
+        )
+
+    assert runner is fake_runner
+    _, kwargs = codex_ctor.call_args
+    assert kwargs["base_instructions"] == "local codex instructions"
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +273,33 @@ async def test_remote_session_stop(mock_registry):
     assert isinstance(msg, StopSessionMsg)
     assert msg.topic_id == 20
     assert session.state == SessionState.STOPPED
+
+
+async def test_remote_session_interrupt(mock_registry):
+    """RemoteSession.interrupt sends InterruptMsg to the worker."""
+    from src.ipc.protocol import InterruptMsg
+
+    sent = []
+
+    async def fake_send_to(worker_id, msg):
+        sent.append((worker_id, msg))
+        return True
+
+    mock_registry.send_to = fake_send_to
+
+    session = RemoteSession(
+        thread_id=25,
+        workdir="/tmp",
+        worker_id="myserver",
+        worker_registry=mock_registry,
+    )
+    result = await session.interrupt()
+
+    assert result is True
+    assert len(sent) == 1
+    _, msg = sent[0]
+    assert isinstance(msg, InterruptMsg)
+    assert msg.topic_id == 25
 
 
 async def test_remote_session_is_alive(mock_registry):
