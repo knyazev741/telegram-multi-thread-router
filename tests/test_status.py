@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.bot.status import StatusUpdater
+from src.bot.status import StatusUpdater, _short_model
 
 
 def _make_bot(message_id: int = 42) -> AsyncMock:
@@ -155,3 +155,8 @@ def test_error_format():
     assert "is_error" in source, (
         "STAT-07 not satisfied: runner.py does not check msg.is_error"
     )
+
+
+def test_short_model_escapes_html():
+    """Model labels are escaped before insertion into HTML status messages."""
+    assert _short_model("<synthetic>") == "&lt;synthetic&gt;"

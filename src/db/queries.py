@@ -162,12 +162,29 @@ async def delete_session_and_topic(thread_id: int) -> None:
         await conn.commit()
 
 
-async def update_session_model(thread_id: int, model: str) -> None:
+def normalize_session_model(model: str | None) -> str | None:
+    """Normalize model names before persisting them.
+
+    Some providers/SDK paths can emit synthetic placeholder labels like
+    `<synthetic>`, which are not real model names and should not be stored.
+    """
+    if model is None:
+        return None
+    normalized = str(model).strip()
+    if not normalized:
+        return None
+    if normalized.startswith("<") and normalized.endswith(">"):
+        return None
+    return normalized
+
+
+async def update_session_model(thread_id: int, model: str | None) -> None:
     """Update model when Claude switches models mid-session."""
+    normalized = normalize_session_model(model)
     async with get_connection() as conn:
         await conn.execute(
             "UPDATE sessions SET model=?, updated_at=datetime('now') WHERE thread_id=?",
-            (model, thread_id),
+            (normalized, thread_id),
         )
         await conn.commit()
 

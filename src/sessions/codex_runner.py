@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import html
 import json
 import logging
 import time
@@ -363,7 +364,7 @@ class CodexRunner:
                         await self._bot.send_message(
                             chat_id=self._chat_id,
                             message_thread_id=self.thread_id,
-                            text=f"🔄 Model: <code>{model}</code>",
+                            text=f"🔄 Model: <code>{html.escape(str(model))}</code>",
                             parse_mode="HTML",
                         )
                     continue
@@ -804,7 +805,7 @@ class CodexRunner:
             await self._bot.send_message(
                 chat_id=self._chat_id,
                 message_thread_id=self.thread_id,
-                text=f"🤖 Codex model set to <code>{self.model or 'default'}</code>",
+                text=f"🤖 Codex model set to <code>{html.escape(str(self.model or 'default'))}</code>",
                 parse_mode="HTML",
             )
             return True
@@ -832,8 +833,8 @@ class CodexRunner:
                 text=(
                     f"Provider: <code>{self.provider}</code>\n"
                     f"State: <code>{self.state.name.lower()}</code>\n"
-                    f"Model: <code>{self.model or 'default'}</code>\n"
-                    f"Workdir: <code>{self.workdir}</code>\n"
+                    f"Model: <code>{html.escape(str(self.model or 'default'))}</code>\n"
+                    f"Workdir: <code>{html.escape(self.workdir)}</code>\n"
                     f"Backend thread: <code>{self.backend_session_id or 'pending'}</code>\n"
                     f"Auto-mode: <code>{'on' if self.auto_mode else 'off'}</code>"
                 ),
@@ -848,9 +849,9 @@ class CodexRunner:
                 message_thread_id=self.thread_id,
                 text=(
                     "Codex config:\n"
-                    f"Model: <code>{self.model or 'default'}</code>\n"
-                    f"Workdir: <code>{self.workdir}</code>\n"
-                    f"MCP: <code>{active_mcp}</code>\n"
+                    f"Model: <code>{html.escape(str(self.model or 'default'))}</code>\n"
+                    f"Workdir: <code>{html.escape(self.workdir)}</code>\n"
+                    f"MCP: <code>{html.escape(active_mcp)}</code>\n"
                     f"Intermediate messages: <code>{'stream' if settings.stream_intermediate_messages else 'final-only'}</code>\n"
                     f"Base instructions: <code>{'yes' if self._base_instructions else 'no'}</code>\n"
                     f"Developer instructions: <code>{'yes' if self._developer_instructions else 'no'}</code>"

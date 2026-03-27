@@ -38,7 +38,7 @@ def _format_tokens(n: int) -> str:
 
 def _short_model(model: str) -> str:
     """Shorten model name: 'claude-opus-4-6' → 'opus-4-6', 'claude-sonnet-4-6' → 'sonnet-4-6'."""
-    return model.replace("claude-", "")
+    return html.escape(model.replace("claude-", ""))
 
 
 # All current Claude models have 1M context window (GA since March 2026)

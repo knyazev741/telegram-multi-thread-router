@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -516,9 +517,9 @@ class SessionRunner:
             effort = data.get("effort")
             if effort:
                 self._effort = effort
-            notification = f"🔄 Model: <code>{model}</code>"
+            notification = f"🔄 Model: <code>{html.escape(str(model))}</code>"
             if effort:
-                notification += f" · {effort}"
+                notification += f" · {html.escape(str(effort))}"
 
         if notification:
             try:

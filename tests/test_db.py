@@ -7,6 +7,7 @@ import aiosqlite
 
 from src.db.schema import init_db
 from src.db.connection import get_connection
+from src.db.queries import update_session_model
 
 
 @pytest.fixture
@@ -88,3 +89,27 @@ async def test_foreign_key_constraint(tmp_db):
                 (999999, "/tmp"),
             )
             await conn.commit()
+
+
+async def test_update_session_model_discards_synthetic_placeholder(tmp_db):
+    """Synthetic placeholder model labels are not persisted."""
+    async with get_connection(tmp_db) as conn:
+        await conn.execute(
+            "INSERT INTO topics (thread_id, name) VALUES (?, ?)",
+            (123, "test"),
+        )
+        await conn.execute(
+            "INSERT INTO sessions (thread_id, workdir) VALUES (?, ?)",
+            (123, "/tmp"),
+        )
+        await conn.commit()
+
+    await update_session_model(123, "<synthetic>")
+
+    async with get_connection(tmp_db) as conn:
+        cursor = await conn.execute(
+            "SELECT model FROM sessions WHERE thread_id=?",
+            (123,),
+        )
+        row = await cursor.fetchone()
+        assert row[0] is None
