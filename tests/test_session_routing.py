@@ -60,6 +60,7 @@ async def test_remote_routing(mock_registry):
     stored = manager.get(100)
     assert stored is session
     assert isinstance(stored, RemoteSession)
+    assert stored.provider == "claude"
 
 
 async def test_create_remote_raises_if_duplicate(mock_registry):
@@ -78,6 +79,23 @@ async def test_create_remote_raises_if_duplicate(mock_registry):
             worker_id="myserver",
             worker_registry=mock_registry,
         )
+
+
+def test_normalize_server_name_maps_personal_alias():
+    """Known human aliases normalize to the connected worker ID."""
+    from src.sessions.backend import normalize_server_name
+
+    assert normalize_server_name("personal-server") == "personal"
+    assert normalize_server_name("personal") == "personal"
+    assert normalize_server_name("mac") == "local"
+
+
+def test_resolve_workdir_for_personal_maps_agent_repo():
+    """Known local repo paths are rewritten to server paths for remote workers."""
+    from src.sessions.backend import resolve_workdir_for_server
+
+    assert resolve_workdir_for_server("personal", "/Users/knyaz/agent") == "/root/agent"
+    assert resolve_workdir_for_server("personal", "agent") == "/root/agent"
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +119,32 @@ async def test_local_default(mock_bot, permission_manager):
     assert not isinstance(runner, RemoteSession)
     stored = manager.get(300)
     assert isinstance(stored, SessionRunner)
+
+
+async def test_local_codex_loads_repo_local_instructions(tmp_path, mock_bot, permission_manager):
+    """Local Codex sessions inherit repo-local AGENTS.md/CLAUDE.md instructions."""
+    instructions_path = tmp_path / "AGENTS.md"
+    instructions_path.write_text("local codex instructions")
+
+    manager = SessionManager()
+    fake_runner = MagicMock()
+    fake_runner.start = AsyncMock()
+    codex_ctor = MagicMock(return_value=fake_runner)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.sessions.manager.CodexRunner", codex_ctor)
+        runner = await manager.create(
+            thread_id=301,
+            workdir=str(tmp_path),
+            bot=mock_bot,
+            chat_id=-100999,
+            permission_manager=permission_manager,
+            provider="codex",
+        )
+
+    assert runner is fake_runner
+    _, kwargs = codex_ctor.call_args
+    assert kwargs["base_instructions"] == "local codex instructions"
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +275,33 @@ async def test_remote_session_stop(mock_registry):
     assert session.state == SessionState.STOPPED
 
 
+async def test_remote_session_interrupt(mock_registry):
+    """RemoteSession.interrupt sends InterruptMsg to the worker."""
+    from src.ipc.protocol import InterruptMsg
+
+    sent = []
+
+    async def fake_send_to(worker_id, msg):
+        sent.append((worker_id, msg))
+        return True
+
+    mock_registry.send_to = fake_send_to
+
+    session = RemoteSession(
+        thread_id=25,
+        workdir="/tmp",
+        worker_id="myserver",
+        worker_registry=mock_registry,
+    )
+    result = await session.interrupt()
+
+    assert result is True
+    assert len(sent) == 1
+    _, msg = sent[0]
+    assert isinstance(msg, InterruptMsg)
+    assert msg.topic_id == 25
+
+
 async def test_remote_session_is_alive(mock_registry):
     """RemoteSession.is_alive reflects WorkerRegistry.is_connected."""
     session = RemoteSession(
@@ -306,6 +377,36 @@ async def test_insert_session_default_server(tmp_db):
         assert row[0] == "local"
 
 
+async def test_insert_session_with_provider_and_backend_id(tmp_db):
+    """insert_session stores provider and backend_session_id for non-Claude backends."""
+    import aiosqlite
+    from src.db.queries import insert_session
+    from src.db.connection import get_connection
+
+    async with get_connection() as conn:
+        await conn.execute(
+            "INSERT INTO topics (thread_id, name) VALUES (?, ?)",
+            (4, "codex-topic"),
+        )
+        await conn.commit()
+
+    await insert_session(
+        thread_id=4,
+        workdir="/tmp/codex",
+        server="local",
+        provider="codex",
+        backend_session_id="thread-123",
+    )
+
+    async with aiosqlite.connect(str(tmp_db)) as db:
+        cursor = await db.execute(
+            "SELECT provider, backend_session_id FROM sessions WHERE thread_id=4"
+        )
+        row = await cursor.fetchone()
+        assert row[0] == "codex"
+        assert row[1] == "thread-123"
+
+
 async def test_get_resumable_sessions_includes_server(tmp_db):
     """get_resumable_sessions() returns server field in result rows."""
     from src.db.queries import insert_session, get_resumable_sessions
@@ -328,3 +429,29 @@ async def test_get_resumable_sessions_includes_server(tmp_db):
     matching = [r for r in rows if r["thread_id"] == 3]
     assert len(matching) == 1
     assert matching[0]["server"] == "remotehost"
+
+
+async def test_get_resumable_sessions_uses_backend_session_id_for_codex(tmp_db):
+    """Non-Claude resumable sessions are selected by backend_session_id."""
+    from src.db.queries import insert_session, get_resumable_sessions
+    from src.db.connection import get_connection
+
+    async with get_connection() as conn:
+        await conn.execute(
+            "INSERT INTO topics (thread_id, name) VALUES (?, ?)",
+            (5, "codex-topic"),
+        )
+        await conn.commit()
+
+    await insert_session(
+        thread_id=5,
+        workdir="/tmp",
+        provider="codex",
+        backend_session_id="thread-xyz",
+    )
+
+    rows = await get_resumable_sessions()
+    matching = [r for r in rows if r["thread_id"] == 5]
+    assert len(matching) == 1
+    assert matching[0]["provider"] == "codex"
+    assert matching[0]["backend_session_id"] == "thread-xyz"

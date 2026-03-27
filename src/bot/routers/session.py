@@ -10,6 +10,15 @@ from aiogram.enums import ContentType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 
+from src.sessions.backend import (
+    SUPPORTED_SESSION_PROVIDERS,
+    get_default_session_provider,
+    is_supported_provider,
+    normalize_provider,
+    normalize_server_name,
+    resolve_workdir_for_server,
+    validate_workdir_for_server,
+)
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionCallback, PermissionManager
 from src.sessions.questions import QuestionCallback, QuestionManager, build_question_keyboard
@@ -38,6 +47,45 @@ def _get_runner_or_none(session_manager: SessionManager, thread_id: int):
     return session_manager.get(thread_id)
 
 
+def _parse_new_command_args(text: str) -> tuple[str, str, str, str] | None:
+    """Parse `/new` arguments preserving legacy positional behavior.
+
+    Supported forms:
+    - /new <name> <workdir>
+    - /new <name> <workdir> <server>
+    - /new <name> <workdir> <server> <provider>
+    - /new <name> <workdir> provider=codex
+    - /new <name> <workdir> server=myhost provider=codex
+    """
+    args = text.split()
+    if len(args) < 3:
+        return None
+
+    name = args[1]
+    workdir = args[2]
+    server_name = "local"
+    provider = get_default_session_provider()
+
+    for extra in args[3:]:
+        if extra.startswith("server="):
+            server_name = extra.split("=", 1)[1] or "local"
+            continue
+        if extra.startswith("provider="):
+            provider = extra.split("=", 1)[1] or get_default_session_provider()
+            continue
+        if extra in SUPPORTED_SESSION_PROVIDERS:
+            provider = extra
+            continue
+        server_name = extra
+
+    return name, workdir, normalize_server_name(server_name), provider
+
+
+def _default_model_for_provider(provider: str) -> str | None:
+    """Return the default model to persist/use for a provider."""
+    if provider == "codex":
+        return None
+    return "opus"
 @session_router.callback_query(PermissionCallback.filter())
 async def handle_permission_callback(
     query: CallbackQuery,
@@ -153,14 +201,28 @@ async def handle_new(
     """
     from aiogram.methods import CreateForumTopic
 
-    args = message.text.split(maxsplit=3)
-    if len(args) < 3:
-        await message.reply("Usage: /new <name> <workdir> [server-name]")
+    parsed = _parse_new_command_args(message.text or "")
+    if parsed is None:
+        await message.reply("Usage: /new <name> <workdir> [server-name] [provider]")
         return
 
-    name = args[1]
-    workdir = args[2]
-    server_name = args[3] if len(args) > 3 else "local"
+    name, workdir, server_name, provider = parsed
+    workdir = resolve_workdir_for_server(server_name, workdir)
+    validation_error = validate_workdir_for_server(server_name, workdir)
+    if validation_error:
+        await message.reply(validation_error)
+        return
+
+    if not is_supported_provider(provider):
+        await message.reply(
+            f"Unknown provider '{provider}'. Supported: {', '.join(SUPPORTED_SESSION_PROVIDERS)}."
+        )
+        return
+    provider = normalize_provider(provider)
+
+    if provider == "codex" and not settings.enable_codex:
+        await message.reply("Codex sessions are disabled. Set ENABLE_CODEX=true to enable them.")
+        return
 
     # Validate server connection for remote sessions
     if server_name != "local":
@@ -176,9 +238,15 @@ async def handle_new(
     thread_id = topic.message_thread_id
 
     # Persist to DB
-    model = "opus"
+    model = _default_model_for_provider(provider)
     await insert_topic(thread_id, name)
-    await insert_session(thread_id, workdir, model=model, server=server_name)
+    await insert_session(
+        thread_id,
+        workdir,
+        model=model,
+        server=server_name,
+        provider=provider,
+    )
 
     # Start session (local or remote)
     if server_name != "local":
@@ -188,6 +256,7 @@ async def handle_new(
             worker_id=server_name,
             worker_registry=worker_registry,
             model=model,
+            provider=provider,
         )
     else:
         await session_manager.create(
@@ -197,6 +266,7 @@ async def handle_new(
             chat_id=settings.chat_id,
             permission_manager=permission_manager,
             model=model,
+            provider=provider,
         )
 
     await bot.send_message(
@@ -204,7 +274,8 @@ async def handle_new(
         message_thread_id=thread_id,
         text=(
             f"Session <b>{name}</b> started\n"
-            f"Model: <code>{model}</code>\n"
+            f"Provider: <code>{provider}</code>\n"
+            f"Model: <code>{model or 'default'}</code>\n"
             f"Thread: <code>{thread_id}</code>\n"
             f"Server: {server_name}\n"
             f"Workdir: <code>{workdir}</code>"
@@ -375,10 +446,26 @@ async def handle_photo(message: Message, session_manager: SessionManager) -> Non
         image_data = buf.getvalue()
         caption = message.caption or ""
 
+        logger.info(
+            "Photo received in topic %d (%d bytes, remote=%s)",
+            thread_id,
+            len(image_data),
+            isinstance(runner, RemoteSession),
+        )
+
         await _react(message, "👀")
 
-        # Use enqueue_image if available (local sessions), fall back to text path for remote
-        if hasattr(runner, "enqueue_image"):
+        if isinstance(runner, RemoteSession):
+            logger.info("Forwarding photo from topic %d to worker %s", thread_id, runner.worker_id)
+            await runner.enqueue_file(
+                file_name=f"photo_{photo.file_unique_id}.jpg",
+                file_bytes=image_data,
+                caption=caption,
+                media_type="image/jpeg",
+                reply_to_message_id=message.message_id,
+                is_image=True,
+            )
+        elif hasattr(runner, "enqueue_image"):
             await runner.enqueue_image(
                 image_data=image_data,
                 media_type="image/jpeg",
@@ -386,7 +473,6 @@ async def handle_photo(message: Message, session_manager: SessionManager) -> Non
                 reply_to_message_id=message.message_id,
             )
         else:
-            # Remote session — save to workdir and send path
             dest = Path(runner.workdir) / f"photo_{photo.file_unique_id}.jpg"
             dest.write_bytes(image_data)
             enqueue_text = f"User sent a photo: {dest}\n{caption}".strip()
@@ -417,13 +503,29 @@ async def handle_document(message: Message, session_manager: SessionManager) -> 
 
     try:
         filename = message.document.file_name or f"file_{message.document.file_unique_id}"
-        dest = Path(runner.workdir) / filename
-        await message.bot.download(file=message.document.file_id, destination=str(dest))
         caption = message.caption or ""
-        enqueue_text = f"User sent file: {filename} at {dest}\n{caption}".strip()
+        from io import BytesIO
+
+        buf = BytesIO()
+        await message.bot.download(file=message.document.file_id, destination=buf)
+        file_bytes = buf.getvalue()
+        caption = message.caption or ""
         # 👀 = enqueued to Claude session
         await _react(message, "👀")
-        await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
+        if isinstance(runner, RemoteSession):
+            await runner.enqueue_file(
+                file_name=filename,
+                file_bytes=file_bytes,
+                caption=caption,
+                media_type=message.document.mime_type,
+                reply_to_message_id=message.message_id,
+                is_image=False,
+            )
+        else:
+            dest = Path(runner.workdir) / filename
+            dest.write_bytes(file_bytes)
+            enqueue_text = f"User sent file: {filename} at {dest}\n{caption}".strip()
+            await runner.enqueue(enqueue_text, reply_to_message_id=message.message_id)
     except ConnectionError as e:
         await message.reply(str(e))
     except Exception as e:
@@ -458,10 +560,12 @@ async def handle_list_in_session(
         else:
             server = "local"
             status = ""
+        provider = getattr(runner, "provider", get_default_session_provider())
         server_info = f"on <i>{server}</i> {status}".strip()
         auto = " 🤖auto" if getattr(runner, "auto_mode", False) else ""
         lines.append(
-            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] {server_info}{auto}"
+            f"- <b>{thread_id}</b>: {runner.workdir} [{runner.state.name}] "
+            f"provider=<code>{provider}</code> {server_info}{auto}"
         )
 
     # Also show connected workers

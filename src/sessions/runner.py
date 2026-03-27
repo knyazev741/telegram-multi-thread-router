@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -31,6 +32,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 
 from src.sessions.state import SessionState
+from src.sessions.backend import SessionProvider, looks_like_provider_limit_error
 from src.sessions.permissions import PermissionManager, build_permission_keyboard, format_permission_message
 from src.sessions.questions import QuestionManager, build_question_keyboard, format_question_message
 from src.sessions.mcp_tools import create_telegram_mcp_server
@@ -145,6 +147,7 @@ class SessionRunner:
     ) -> None:
         self.thread_id = thread_id
         self.workdir = str(Path(workdir).expanduser())
+        self.provider: SessionProvider = "claude"
         self.session_id = session_id
         self.model = model
         self._bot = bot
@@ -164,6 +167,8 @@ class SessionRunner:
         self._current_reply_to: int | None = None  # message_id to reply to for current turn
         self._effort: str | None = None  # Track effort level (updated from SDK system messages)
         self.auto_mode: bool = False  # Auto-approve all permissions (no prompts)
+        self._provider_exhausted_callback: Callable[[str], Awaitable[None]] | None = None
+        self._provider_exhausted_notified = False
         # (removed _consecutive_perm_timeouts — abort on first timeout now)
 
         # Initialize allowed tools from global permissions
@@ -172,6 +177,13 @@ class SessionRunner:
     async def start(self) -> None:
         """Launch the runner asyncio task."""
         self._task = asyncio.create_task(self._run())
+
+    def _schedule_provider_exhausted(self, reason: str) -> None:
+        """Notify the orchestrator supervisor once when this provider is exhausted."""
+        if self._provider_exhausted_notified or self._provider_exhausted_callback is None:
+            return
+        self._provider_exhausted_notified = True
+        asyncio.create_task(self._provider_exhausted_callback(reason))
 
     async def _run(self) -> None:
         """Main loop: own the ClaudeSDKClient context, process messages from queue.
@@ -245,6 +257,8 @@ class SessionRunner:
         except Exception as e:
             logger.error("Session error for thread %d: %s", self.thread_id, e)
             self.state = SessionState.STOPPED
+            if looks_like_provider_limit_error(str(e)):
+                self._schedule_provider_exhausted(str(e))
             if self._typing:
                 await self._typing.stop()
                 self._typing = None
@@ -667,6 +681,9 @@ class SessionRunner:
                             )
                         except Exception:
                             pass
+                        self._schedule_provider_exhausted(
+                            f"Claude rate limited{resets}".strip()
+                        )
                     elif info.status == "allowed_warning" and info.utilization:
                         try:
                             await self._bot.send_message(

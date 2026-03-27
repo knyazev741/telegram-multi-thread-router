@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+from pathlib import Path
 
 from src.ipc.protocol import (
     AssistantTextMsg,
@@ -139,17 +140,25 @@ class WorkerOutputChannel:
             file_path = str(document.path)
         else:
             file_path = str(document)
-
-        p = Path(file_path)
-        file_data = p.read_bytes()
-        file_name = p.name
-
+        path = Path(file_path)
+        file_name = path.name or "file"
+        file_bytes = None
+        try:
+            file_bytes = path.read_bytes()
+        except OSError as e:
+            logger.warning("WorkerOutputChannel: failed to read %s: %s", file_path, e)
+        logger.info(
+            "WorkerOutputChannel: sending file for topic %d: %s (%s bytes)",
+            message_thread_id or 0,
+            file_path,
+            len(file_bytes) if file_bytes is not None else "unknown",
+        )
         await self._send(
             McpSendFileMsg(
                 topic_id=message_thread_id or 0,
                 file_path=file_path,
                 file_name=file_name,
-                file_data=file_data,
+                file_bytes=file_bytes,
                 caption=caption,
             )
         )

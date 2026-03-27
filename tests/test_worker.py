@@ -1,12 +1,18 @@
 """Tests for worker-side components: WorkerOutputChannel, WorkerClient reconnect, permission bridge."""
 
 import asyncio
+import importlib.util
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
+from src.bot.routers.session import _parse_new_command_args
 from src.ipc.protocol import (
     AssistantTextMsg,
+    McpSendFileMsg,
+    QuestionRequestMsg,
+    StartSessionMsg,
+    UserFileMsg,
     UserMessageMsg,
     _enc,
     _b2w_dec,
@@ -40,6 +46,28 @@ async def test_worker_output_channel_send_text():
     assert decoded.text == "test output"
 
 
+async def test_worker_output_channel_send_document_embeds_bytes(tmp_path):
+    """WorkerOutputChannel.send_document serializes file bytes for remote upload."""
+    writer = MagicMock()
+    writer.is_closing.return_value = False
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+
+    path = tmp_path / "42.txt"
+    path.write_text("hello")
+
+    channel = WorkerOutputChannel(writer, chat_id=0)
+    await channel.send_document(chat_id=0, document=str(path), message_thread_id=7)
+
+    raw_bytes = writer.write.call_args[0][0]
+    n = int.from_bytes(raw_bytes[:4], "big")
+    payload = raw_bytes[4:4 + n]
+    decoded = _w2b_dec.decode(payload)
+    assert isinstance(decoded, McpSendFileMsg)
+    assert decoded.file_name == "42.txt"
+    assert decoded.file_bytes == b"hello"
+
+
 async def test_worker_output_channel_not_connected_drops_silently():
     """WorkerOutputChannel with None writer drops messages without raising."""
     channel = WorkerOutputChannel(None, chat_id=0)
@@ -70,6 +98,16 @@ async def test_worker_session_runner_instantiates():
     # Just verify it was created without error; don't start it (would invoke Claude)
     assert runner.thread_id == 1
     assert runner.workdir == "/tmp"
+
+
+def test_parse_new_command_normalizes_personal_alias():
+    """`/new` accepts human server aliases and normalizes them."""
+    assert _parse_new_command_args("/new repo /tmp/repo personal-server") == (
+        "repo",
+        "/tmp/repo",
+        "personal",
+        "claude",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +239,139 @@ async def test_permission_resolve_unknown_request():
     client._resolve_permission("nonexistent-id", "deny")
 
 
+async def test_request_questions_round_trip():
+    """WorkerClient bridges question requests and resolves them from bot answers."""
+    from src.worker.client import WorkerClient
+
+    writer = MagicMock()
+    writer.is_closing.return_value = False
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+
+    client = WorkerClient(
+        host="127.0.0.1",
+        port=0,
+        auth_token="tok",
+        worker_id="test-worker",
+    )
+    client._output_channel = WorkerOutputChannel(writer, chat_id=0)
+
+    task = asyncio.create_task(
+        client._request_questions(
+            17,
+            [{"id": "provider", "question": "Which provider?"}],
+        )
+    )
+    await asyncio.sleep(0)
+
+    raw_bytes = writer.write.call_args[0][0]
+    n = int.from_bytes(raw_bytes[:4], "big")
+    payload = raw_bytes[4:4 + n]
+    decoded = _w2b_dec.decode(payload)
+    assert isinstance(decoded, QuestionRequestMsg)
+    assert decoded.topic_id == 17
+
+    client._resolve_question(decoded.request_id, {"Which provider?": "codex"})
+    result = await task
+    assert result == {"Which provider?": "codex"}
+
+
+async def test_start_session_supports_codex():
+    """WorkerClient starts CodexRunner for provider=codex."""
+    from src.worker.client import WorkerClient
+    from src.sessions.state import SessionState
+
+    client = WorkerClient(
+        host="127.0.0.1",
+        port=0,
+        auth_token="tok",
+        worker_id="test-worker",
+    )
+    client._output_channel = WorkerOutputChannel(None, chat_id=0)
+    client._announce_session_started = AsyncMock()
+
+    fake_runner = MagicMock()
+    fake_runner.start = AsyncMock()
+    fake_runner.session_id = None
+    fake_runner.backend_session_id = "codex-thread-1"
+    fake_runner.state = SessionState.IDLE
+
+    with patch("src.worker.client.CodexRunner", return_value=fake_runner):
+        await client._start_session(
+            StartSessionMsg(topic_id=33, cwd="/tmp/codex", provider="codex")
+        )
+
+    await asyncio.sleep(0)
+    assert client._sessions[33] is fake_runner
+    fake_runner.start.assert_awaited_once()
+    client._announce_session_started.assert_awaited_once()
+
+
+async def test_handle_file_input_uses_enqueue_image_for_remote_photo(tmp_path):
+    """WorkerClient saves incoming photo bytes and forwards them as native image input."""
+    from src.worker.client import WorkerClient
+
+    client = WorkerClient(
+        host="127.0.0.1",
+        port=0,
+        auth_token="tok",
+        worker_id="test-worker",
+    )
+
+    runner = MagicMock()
+    runner.workdir = str(tmp_path)
+    runner.enqueue_image = AsyncMock()
+    client._sessions[17] = runner
+
+    await client._handle_file_input(
+        UserFileMsg(
+            topic_id=17,
+            file_name="photo.jpg",
+            file_bytes=b"abc",
+            caption="look",
+            media_type="image/jpeg",
+            reply_to_message_id=9,
+            is_image=True,
+        )
+    )
+
+    assert (tmp_path / "photo.jpg").read_bytes() == b"abc"
+    runner.enqueue_image.assert_awaited_once_with(
+        image_data=b"abc",
+        media_type="image/jpeg",
+        caption="look",
+        reply_to_message_id=9,
+    )
+
+
+def test_coerce_user_file_msg_accepts_same_shape_from_other_module():
+    """Worker tolerates UserFileMsg objects whose class identity comes from another import."""
+    from pathlib import Path
+
+    from src.worker.client import _coerce_user_file_msg
+
+    protocol_path = Path(__file__).resolve().parents[1] / "src" / "ipc" / "protocol.py"
+    spec = importlib.util.spec_from_file_location("alt_protocol", protocol_path)
+    assert spec and spec.loader
+    alt_protocol = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(alt_protocol)
+
+    foreign_msg = alt_protocol.UserFileMsg(
+        topic_id=17,
+        file_name="photo.jpg",
+        file_bytes=b"abc",
+        caption="look",
+        media_type="image/jpeg",
+        reply_to_message_id=9,
+        is_image=True,
+    )
+
+    coerced = _coerce_user_file_msg(foreign_msg)
+    assert isinstance(coerced, UserFileMsg)
+    assert coerced.file_name == "photo.jpg"
+    assert coerced.file_bytes == b"abc"
+
+
 # ---------------------------------------------------------------------------
 # MSRV-06: Permission cancel on disconnect
 # ---------------------------------------------------------------------------
@@ -227,6 +398,27 @@ async def test_permission_cancel_on_disconnect():
     assert f1.done() and f1.result() == "deny"
     assert f2.done() and f2.result() == "deny"
     assert len(client._permission_futures) == 0
+
+
+async def test_question_cancel_on_disconnect():
+    """_on_disconnected resolves all pending question futures with empty answers."""
+    from src.worker.client import WorkerClient
+
+    client = WorkerClient(
+        host="127.0.0.1",
+        port=0,
+        auth_token="tok",
+        worker_id="test-worker",
+    )
+
+    loop = asyncio.get_event_loop()
+    future: asyncio.Future = loop.create_future()
+    client._question_futures["q1"] = future
+
+    client._on_disconnected()
+
+    assert future.done() and future.result() == {}
+    assert len(client._question_futures) == 0
 
 
 async def test_on_disconnected_clears_writer():

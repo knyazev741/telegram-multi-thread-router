@@ -76,14 +76,37 @@ class OwnerAuthMiddleware(BaseMiddleware):
 
         session_manager = dispatcher.get("session_manager")
         permission_manager = dispatcher.get("permission_manager")
+        question_manager = dispatcher.get("question_manager")
         worker_registry = dispatcher.get("worker_registry")
 
-        if not all([session_manager, permission_manager, worker_registry]):
+        if not all([session_manager, permission_manager, question_manager, worker_registry]):
             logger.warning("Cannot create orchestrator — dispatcher not fully initialized")
             return
 
+        orchestrator_mcp_url = None
+        if settings.enable_codex:
+            orchestrator_mcp_server = dispatcher.get("orchestrator_mcp_server")
+            if orchestrator_mcp_server is None:
+                from src.sessions.orchestrator_mcp import LocalOrchestratorMcpServer
+
+                orchestrator_mcp_server = LocalOrchestratorMcpServer(
+                    bot,
+                    settings.chat_id,
+                    session_manager,
+                    permission_manager,
+                    worker_registry,
+                )
+                dispatcher["orchestrator_mcp_server"] = orchestrator_mcp_server
+            orchestrator_mcp_url = await orchestrator_mcp_server.start()
+
         orch_thread = await ensure_orchestrator(
-            bot, settings.chat_id, session_manager, permission_manager, worker_registry,
+            bot,
+            settings.chat_id,
+            session_manager,
+            permission_manager,
+            question_manager,
+            worker_registry,
+            orchestrator_mcp_url=orchestrator_mcp_url,
         )
         if orch_thread:
             dispatcher["orchestrator_thread_id"] = orch_thread

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, FSInputFile, ReactionTypeEmoji
@@ -132,7 +133,9 @@ async def _resume_worker_sessions(
                 worker_id=worker_id,
                 worker_registry=worker_registry,
                 session_id=row.get("session_id"),
+                backend_session_id=row.get("backend_session_id"),
                 model=row.get("model"),
+                provider=row.get("provider", "claude"),
             )
             if row.get("auto_mode"):
                 remote.auto_mode = True
@@ -189,7 +192,7 @@ async def _handle_worker(
 
         # --- Status trackers for remote sessions ---
         from src.bot.status import StatusUpdater
-        from src.db.queries import update_session_id
+        from src.db.queries import update_backend_session_id, update_session_id
         from aiogram.exceptions import TelegramRetryAfter
 
         _status_updaters: dict[int, StatusUpdater] = {}
@@ -493,6 +496,10 @@ async def _handle_worker(
                         await update_session_id(msg.topic_id, msg.session_id)
                     except Exception:
                         pass
+                    try:
+                        await update_backend_session_id(msg.topic_id, msg.session_id)
+                    except Exception:
+                        pass
                 logger.info(
                     "Worker %s started session %s on topic %d",
                     worker_id, msg.session_id, msg.topic_id,
@@ -556,14 +563,18 @@ async def _handle_worker(
 
             elif isinstance(msg, McpSendFileMsg):
                 try:
-                    if msg.file_data:
-                        # Remote file — content transferred over TCP
+                    logger.info(
+                        "McpSendFile for topic %d: %s (%s bytes)",
+                        msg.topic_id,
+                        msg.file_name or Path(msg.file_path).name,
+                        len(msg.file_bytes) if msg.file_bytes is not None else "stream",
+                    )
+                    if msg.file_bytes is not None:
                         document = BufferedInputFile(
-                            file=msg.file_data,
-                            filename=msg.file_name,
+                            msg.file_bytes,
+                            filename=msg.file_name or Path(msg.file_path).name or "file",
                         )
                     else:
-                        # Fallback for local path (shouldn't happen for remote)
                         document = FSInputFile(msg.file_path)
                     await bot.send_document(
                         chat_id=settings.chat_id,
