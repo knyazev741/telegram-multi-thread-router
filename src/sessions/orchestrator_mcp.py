@@ -264,19 +264,20 @@ class LocalOrchestratorMcpServer:
             runner = self._session_manager.get(thread_id)
             goal = getattr(runner, "goal_text", None) or "unknown"
             state = runner.state.name if runner else "UNKNOWN"
-            text = (
-                f"🎯 <b>Goal check</b> — thread {thread_id}\n"
-                f"Reason: {html.escape(reason)}\n"
-                f"Goal: {html.escape(goal)}\n"
-                f"State: {state}\n\n"
-                "Review progress. Use <code>send_to_session</code> to push forward, "
-                "or <code>goal_mode(enable=false)</code> if the goal is achieved."
+            prompt = (
+                f"[GOAL CHECK] Session thread {thread_id} — {reason}.\n"
+                f"Goal: {goal}\n"
+                f"Current state: {state}\n\n"
+                "Check on this session's progress. If the goal is not yet achieved, "
+                f"use send_to_session to push it forward with a specific instruction. "
+                f"If the goal IS achieved, call goal_mode(thread_id={thread_id}, goal_text='', enable=false)."
             )
-            with contextlib.suppress(Exception):
-                await send_html_message(
-                    self._bot, chat_id=self._chat_id,
-                    message_thread_id=self._orchestrator_thread_id, text=text,
-                )
+            orch_runner = self._session_manager.get(self._orchestrator_thread_id)
+            if orch_runner is not None:
+                with contextlib.suppress(Exception):
+                    await orch_runner.enqueue(prompt)
+            else:
+                logger.warning("Goal notify: orchestrator runner not found")
 
         def _make_turn_callback(tid: int):
             async def _cb():

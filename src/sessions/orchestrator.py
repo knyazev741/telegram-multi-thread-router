@@ -406,7 +406,7 @@ def create_orchestrator_mcp_server(
     import time
 
     async def _goal_notify(thread_id: int, reason: str) -> None:
-        """Send a goal-mode notification to the orchestrator thread (debounced)."""
+        """Inject a goal-mode notification into the orchestrator session so it acts on it."""
         now = time.monotonic()
         last = _goal_last_notify.get(thread_id, 0)
         if now - last < _GOAL_NOTIFY_DEBOUNCE:
@@ -416,20 +416,23 @@ def create_orchestrator_mcp_server(
         runner = session_manager.get(thread_id)
         goal = getattr(runner, "goal_text", None) or "unknown"
         state = runner.state.name if runner else "UNKNOWN"
-        text = (
-            f"🎯 <b>Goal check</b> — thread {thread_id}\n"
-            f"Reason: {html.escape(reason)}\n"
-            f"Goal: {html.escape(goal)}\n"
-            f"State: {state}\n\n"
-            "Review progress. Use <code>send_to_session</code> to push forward, "
-            "or <code>goal_mode(enable=false)</code> if the goal is achieved."
+        prompt = (
+            f"[GOAL CHECK] Session thread {thread_id} — {reason}.\n"
+            f"Goal: {goal}\n"
+            f"Current state: {state}\n\n"
+            "Check on this session's progress. If the goal is not yet achieved, "
+            "use send_to_session to push it forward with a specific instruction. "
+            "If the goal IS achieved, call goal_mode(thread_id={thread_id}, goal_text='', enable=false)."
         )
-        try:
-            await send_html_message(
-                bot, chat_id=chat_id, message_thread_id=orchestrator_thread_id, text=text,
-            )
-        except Exception as e:
-            logger.warning("Failed to send goal notification for thread %d: %s", thread_id, e)
+        # Inject into the orchestrator's own session queue so Claude processes it
+        orch_runner = session_manager.get(orchestrator_thread_id)
+        if orch_runner is not None:
+            try:
+                await orch_runner.enqueue(prompt)
+            except Exception as e:
+                logger.warning("Failed to enqueue goal notification for thread %d: %s", thread_id, e)
+        else:
+            logger.warning("Goal notify: orchestrator runner not found for thread %d", orchestrator_thread_id)
 
     async def _goal_turn_complete_callback(thread_id: int) -> None:
         await _goal_notify(thread_id, "turn completed")
