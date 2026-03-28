@@ -92,7 +92,7 @@ async def get_resumable_sessions() -> list[dict]:
         try:
             cursor = await conn.execute(
                 "SELECT thread_id, session_id, backend_session_id, workdir, model, state, server, "
-                "provider, auto_mode FROM sessions "
+                "provider, auto_mode, goal_text FROM sessions "
                 "WHERE state IN ('running', 'idle') AND ("
                 "(provider='claude' AND session_id IS NOT NULL) OR "
                 "(provider!='claude' AND backend_session_id IS NOT NULL)"
@@ -150,6 +150,16 @@ async def update_auto_mode(thread_id: int, enabled: bool) -> None:
         await conn.execute(
             "UPDATE sessions SET auto_mode=?, updated_at=datetime('now') WHERE thread_id=?",
             (int(enabled), thread_id),
+        )
+        await conn.commit()
+
+
+async def update_goal_text(thread_id: int, goal_text: str | None) -> None:
+    """Update goal_text for a session (None to clear)."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "UPDATE sessions SET goal_text=?, updated_at=datetime('now') WHERE thread_id=?",
+            (goal_text, thread_id),
         )
         await conn.commit()
 

@@ -120,6 +120,8 @@ class CodexRunner:
         self._provider_exhausted_callback: Callable[[str], Awaitable[None]] | None = None
         self._provider_exhausted_notified = False
         self._turn_first_text_sent = False
+        self.goal_text: str | None = None
+        self._on_turn_complete: Callable[[], Awaitable[None]] | None = None
 
     def _build_config_overrides(self) -> list[str]:
         """Return codex CLI config overrides for this runner."""
@@ -201,6 +203,11 @@ class CodexRunner:
 
                 self.state = SessionState.IDLE
                 await update_session_state(self.thread_id, "idle")
+                if self.goal_text and self._on_turn_complete:
+                    try:
+                        await self._on_turn_complete()
+                    except Exception as e_cb:
+                        logger.warning("Goal turn-complete callback failed for thread %d: %s", self.thread_id, e_cb)
         except Exception as e:
             logger.error("Codex session error for thread %d: %s", self.thread_id, e)
             self.state = SessionState.STOPPED

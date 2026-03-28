@@ -169,6 +169,8 @@ class SessionRunner:
         self._current_reply_to: int | None = None  # message_id to reply to for current turn
         self._effort: str | None = None  # Track effort level (updated from SDK system messages)
         self.auto_mode: bool = False  # Auto-approve all permissions (no prompts)
+        self.goal_text: str | None = None  # Goal mode target (None = disabled)
+        self._on_turn_complete: Callable[[], Awaitable[None]] | None = None
         self._provider_exhausted_callback: Callable[[str], Awaitable[None]] | None = None
         self._provider_exhausted_notified = False
         # (removed _consecutive_perm_timeouts — abort on first timeout now)
@@ -250,6 +252,11 @@ class SessionRunner:
                         break
                     self.state = SessionState.IDLE
                     await update_session_state(self.thread_id, "idle")
+                    if self.goal_text and self._on_turn_complete:
+                        try:
+                            await self._on_turn_complete()
+                        except Exception as e:
+                            logger.warning("Goal turn-complete callback failed for thread %d: %s", self.thread_id, e)
 
                 inject_task.cancel()
                 try:
