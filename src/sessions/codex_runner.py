@@ -698,11 +698,12 @@ class CodexRunner:
             status = str(item.get("status", "")).lower()
             summary = self._describe_task_summary(item)
             if status in {"failed", "error"}:
-                await self._bot.send_message(
-                    chat_id=self._chat_id,
-                    message_thread_id=self.thread_id,
-                    text=f"⚠️ Sub-agent failed: {(summary or description or item_type)[:200]}",
-                )
+                with contextlib.suppress(Exception):
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=f"⚠️ Sub-agent failed: {(summary or description or item_type)[:200]}",
+                    )
             return
         if item_type == "agentMessage":
             item_id = item.get("id")
@@ -900,20 +901,32 @@ class CodexRunner:
                 )
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after)
-                await self._bot.send_message(
-                    chat_id=self._chat_id,
-                    message_thread_id=self.thread_id,
-                    text=escaped_part,
-                    parse_mode="Markdown",
-                    reply_to_message_id=reply_to,
-                )
+                try:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=escaped_part,
+                        parse_mode="Markdown",
+                        reply_to_message_id=reply_to,
+                    )
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=part,
+                            reply_to_message_id=reply_to,
+                        )
             except Exception:
-                await self._bot.send_message(
-                    chat_id=self._chat_id,
-                    message_thread_id=self.thread_id,
-                    text=part,
-                    reply_to_message_id=reply_to,
-                )
+                try:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        message_thread_id=self.thread_id,
+                        text=part,
+                        reply_to_message_id=reply_to,
+                    )
+                except Exception:
+                    logger.warning("Failed to send codex text to thread %d (even plain)", self.thread_id)
             self._turn_first_text_sent = True
 
     async def enqueue(self, text: str, reply_to_message_id: int | None = None) -> None:
