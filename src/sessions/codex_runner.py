@@ -429,17 +429,19 @@ class CodexRunner:
                         message = error.get("message") if isinstance(error, dict) else str(error)
                         if looks_like_provider_limit_error(message):
                             self._schedule_provider_exhausted(message)
-                            await self._bot.send_message(
-                                chat_id=self._chat_id,
-                                message_thread_id=self.thread_id,
-                                text=f"🚫 Codex rate limited or quota exhausted\n{message or 'Unknown error'}",
-                            )
+                            with contextlib.suppress(Exception):
+                                await self._bot.send_message(
+                                    chat_id=self._chat_id,
+                                    message_thread_id=self.thread_id,
+                                    text=f"🚫 Codex rate limited or quota exhausted\n{message or 'Unknown error'}",
+                                )
                         else:
-                            await self._bot.send_message(
-                                chat_id=self._chat_id,
-                                message_thread_id=self.thread_id,
-                                text=f"❌ Codex turn failed\n{message or 'Unknown error'}",
-                            )
+                            with contextlib.suppress(Exception):
+                                await self._bot.send_message(
+                                    chat_id=self._chat_id,
+                                    message_thread_id=self.thread_id,
+                                    text=f"❌ Codex turn failed\n{message or 'Unknown error'}",
+                                )
                     return
         finally:
             watchdog_task.cancel()
