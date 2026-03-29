@@ -614,20 +614,31 @@ class SessionRunner:
                     )
                 except TelegramRetryAfter as e:
                     await asyncio.sleep(e.retry_after)
-                    await self._bot.send_message(
-                        chat_id=self._chat_id,
-                        message_thread_id=self.thread_id,
-                        text=escaped_part,
-                        parse_mode="Markdown",
-                        reply_to_message_id=reply_to,
-                    )
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=escaped_part,
+                            parse_mode="Markdown",
+                            reply_to_message_id=reply_to,
+                        )
+                    except Exception:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=part,
+                            reply_to_message_id=reply_to,
+                        )
                 except Exception:
-                    await self._bot.send_message(
-                        chat_id=self._chat_id,
-                        message_thread_id=self.thread_id,
-                        text=part,
-                        reply_to_message_id=reply_to,
-                    )
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=part,
+                            reply_to_message_id=reply_to,
+                        )
+                    except Exception:
+                        logger.warning("Failed to send text to thread %d (even plain)", self.thread_id)
 
         async def _watchdog_notify() -> None:
             """Escalate from a soft status note to a hard warning if silence persists."""
