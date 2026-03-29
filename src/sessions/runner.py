@@ -244,15 +244,18 @@ class SessionRunner:
                     await self._drain_stale_messages(client)
                     await self._send_query(client, item)
                     await self._drain_response(client)
+                    # Mark idle IMMEDIATELY so _inject_loop doesn't steal the next message
+                    if self.state == SessionState.INTERRUPTING:
+                        self.state = SessionState.STOPPED
+                    else:
+                        self.state = SessionState.IDLE
                     # Stop typing indicator (status finalized inside _drain_response on ResultMessage)
                     if self._typing:
                         await self._typing.stop()
                         self._typing = None
                     self._current_reply_to = None
-                    if self.state == SessionState.INTERRUPTING:
-                        self.state = SessionState.STOPPED
+                    if self.state == SessionState.STOPPED:
                         break
-                    self.state = SessionState.IDLE
                     await update_session_state(self.thread_id, "idle")
                     if self.goal_text and self._on_turn_complete:
                         try:
