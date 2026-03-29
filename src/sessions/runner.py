@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 from dataclasses import dataclass
@@ -240,6 +241,7 @@ class SessionRunner:
                     self._typing = TypingIndicator(self._bot, self._chat_id, self.thread_id)
                     await self._status.start_turn()
                     await self._typing.start()
+                    await self._drain_stale_messages(client)
                     await self._send_query(client, item)
                     await self._drain_response(client)
                     # Stop typing indicator (status finalized inside _drain_response on ResultMessage)
@@ -538,6 +540,47 @@ class SessionRunner:
                 )
             except Exception as e:
                 logger.warning("Failed to send system notification: %s", e)
+
+    async def _drain_stale_messages(self, client: ClaudeSDKClient) -> None:
+        """Drain any buffered messages from background tasks that completed between turns.
+
+        Background sub-agents can finish after the main turn's ResultMessage.
+        Their messages remain in the CLI stdout buffer and would be read by the
+        next receive_response() call, confusing it with stale data.
+        """
+        while True:
+            try:
+                msg = await asyncio.wait_for(client.receive_messages().__anext__(), timeout=0.1)
+            except (asyncio.TimeoutError, StopAsyncIteration):
+                return
+
+            # Forward useful notifications to Telegram, discard the rest
+            if isinstance(msg, TaskNotificationMessage):
+                status = getattr(msg, "status", "")
+                summary = getattr(msg, "summary", "")
+                if status == "failed":
+                    with contextlib.suppress(Exception):
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=f"⚠️ Background task failed: {summary[:200]}",
+                        )
+                elif summary and status in {"completed", "succeeded", "done"}:
+                    with contextlib.suppress(Exception):
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            message_thread_id=self.thread_id,
+                            text=f"ℹ️ Background task {status}: {summary[:200]}",
+                        )
+            elif isinstance(msg, AssistantMessage):
+                # Track model changes from stale messages
+                if hasattr(msg, "model") and msg.model and self._last_seen_model != msg.model:
+                    self._last_seen_model = msg.model
+                    with contextlib.suppress(Exception):
+                        await update_session_model(self.thread_id, msg.model)
+            elif isinstance(msg, SystemMessage):
+                await self._handle_system_message(msg)
+            # ResultMessage, TaskStartedMessage, TaskProgressMessage — silently discard
 
     async def _drain_response(self, client: ClaudeSDKClient) -> None:
         """Receive all messages from the current turn, forwarding text to Telegram with status tracking.
