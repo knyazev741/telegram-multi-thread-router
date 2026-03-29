@@ -29,7 +29,6 @@ from src.sessions.backend import (
     get_default_session_provider,
     get_orchestrator_server_guidance,
     is_supported_provider,
-    load_private_infra_context,
     normalize_provider,
     normalize_server_name,
     resolve_workdir_for_server,
@@ -67,7 +66,6 @@ class LocalOrchestratorMcpServer:
         self._session_manager = session_manager
         self._permission_manager = permission_manager
         self._worker_registry = worker_registry
-        private_context = load_private_infra_context()
         self._fastmcp = FastMCP(
             name="orchestrator",
             instructions=(
@@ -76,7 +74,6 @@ class LocalOrchestratorMcpServer:
                 "- Never pass a macOS /Users/... path to a remote server session.\n"
                 "- If the user names a repo for a remote server, resolve the remote path first.\n\n"
                 f"{get_orchestrator_server_guidance()}"
-                f"{f'{chr(10)}{chr(10)}Private infrastructure context:{chr(10)}{private_context}' if private_context else ''}"
             ),
             host="127.0.0.1",
             port=0,

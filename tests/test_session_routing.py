@@ -90,6 +90,18 @@ def test_normalize_server_name_maps_personal_alias():
     assert normalize_server_name("mac") == "local"
 
 
+def test_orchestrator_server_guidance_is_sanitized():
+    """Public orchestrator guidance should not expose concrete infra details."""
+    from src.sessions.backend import get_orchestrator_server_guidance
+
+    guidance = get_orchestrator_server_guidance()
+
+    assert "167.235.155.73" not in guidance
+    assert "204.168.163.135" not in guidance
+    assert "116.203.112.192" not in guidance
+    assert ".ssh/" not in guidance
+
+
 def test_resolve_workdir_for_personal_maps_agent_repo():
     """Known local repo paths are rewritten to server paths for remote workers."""
     from src.sessions.backend import resolve_workdir_for_server

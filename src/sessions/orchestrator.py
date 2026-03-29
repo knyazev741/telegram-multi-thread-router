@@ -17,7 +17,6 @@ from src.sessions.backend import (
     get_default_session_provider,
     get_orchestrator_server_guidance,
     is_supported_provider,
-    load_private_infra_context,
     normalize_provider,
     normalize_server_name,
     resolve_workdir_for_server,
@@ -123,8 +122,6 @@ def _build_orchestrator_system_prompt(provider: str) -> str:
     """Return the provider-specific orchestrator prompt."""
     default_provider = get_default_session_provider()
     provider_label = "Codex" if provider == "codex" else "Claude Code"
-    private_context = load_private_infra_context()
-    extra_context = f"\n\nPrivate infrastructure context:\n{private_context}" if private_context else ""
     return (
         f"You are a full {provider_label} session with additional session management capabilities.\n\n"
         "You have all standard coding/session tools plus orchestrator MCP tools:\n"
@@ -147,7 +144,6 @@ def _build_orchestrator_system_prompt(provider: str) -> str:
         "resolve the server path first.\n"
         "- If you know both local and server paths for a repo, use the server path on remote workers.\n\n"
         f"{get_orchestrator_server_guidance()}"
-        f"{extra_context}"
     )
 
 

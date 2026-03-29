@@ -97,9 +97,8 @@ def get_orchestrator_server_guidance() -> str:
     """Return the environment-specific server routing guidance for orchestrators."""
     return (
         "Execution environment:\n"
-        "- Use server='local' for this Mac.\n"
-        "- Use server='personal' for the Personal Server "
-        "(SSH host 'personal-server', IP 167.235.155.73).\n"
+        "- Use server='local' for the current machine.\n"
+        "- Use server='personal' for the private Personal Server worker.\n"
         "- Accepted aliases for the Personal Server are: personal, personal-server, personal_server.\n"
     )
 
