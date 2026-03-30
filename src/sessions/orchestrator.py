@@ -22,7 +22,13 @@ from src.sessions.backend import (
     resolve_workdir_for_server,
     validate_workdir_for_server,
 )
-from src.db.queries import insert_session, insert_topic, get_all_active_sessions
+from src.db.queries import (
+    get_all_active_sessions,
+    get_session_by_thread,
+    insert_session,
+    insert_topic,
+    update_session_state,
+)
 from src.sessions.manager import SessionManager
 from src.sessions.permissions import PermissionManager
 
@@ -99,6 +105,46 @@ def _orchestrator_session_stopped_text(thread_id: int) -> str:
     return f"🛑 Session stopped\nThread: {html_code(thread_id)}"
 
 
+def _orchestrator_session_restarted_text(
+    *,
+    thread_id: int,
+    provider: str,
+    model: str | None,
+    server: str,
+    workdir: str,
+) -> str:
+    """Return a stable acknowledgment for a restarted session."""
+    return (
+        "🔄 Session restarted\n"
+        f"Thread: {html_code(thread_id)}\n"
+        f"Provider: {html_code(provider)}\n"
+        f"Model: {html_code(model or 'default')}\n"
+        f"Server: {html.escape(server)}\n"
+        f"Workdir: {html_code(workdir)}"
+    )
+
+
+def _orchestrator_session_resumed_text(
+    *,
+    source_thread_id: int,
+    target_thread_id: int,
+    provider: str,
+    model: str | None,
+    server: str,
+    workdir: str,
+) -> str:
+    """Return a stable acknowledgment for a resumed/moved session."""
+    return (
+        "🔁 Session resumed in a new thread\n"
+        f"From thread: {html_code(source_thread_id)}\n"
+        f"To thread: {html_code(target_thread_id)}\n"
+        f"Provider: {html_code(provider)}\n"
+        f"Model: {html_code(model or 'default')}\n"
+        f"Server: {html.escape(server)}\n"
+        f"Workdir: {html_code(workdir)}"
+    )
+
+
 async def _notify_orchestrator(
     bot: Bot,
     *,
@@ -130,6 +176,8 @@ def _build_orchestrator_system_prompt(provider: str) -> str:
         f"{', '.join(SUPPORTED_SESSION_PROVIDERS)}.\n"
         "- list_sessions(): List all active sessions with status and goals\n"
         "- stop_session(thread_id): Stop a session\n"
+        "- restart_session(thread_id): Restart/resume a session in the same Telegram thread using its saved backend session ID\n"
+        "- resume_session_to_new_thread(source_thread_id, new_thread_name, stop_source): Continue a saved session in a brand new Telegram thread, optionally stopping the source thread\n"
         "- auto_mode(thread_id, enable): Toggle auto-approvals for a session\n"
         "- goal_mode(thread_id, goal_text, enable): Set a goal for a session. "
         "When enabled, you will be notified after each turn and on idle (10min). "
@@ -152,6 +200,56 @@ def _orchestrator_model_for_provider(provider: str) -> str | None:
     if provider == "codex":
         return None
     return "sonnet"
+
+
+async def _start_managed_session_from_db_row(
+    *,
+    thread_id: int,
+    row: dict,
+    bot: Bot,
+    chat_id: int,
+    session_manager: SessionManager,
+    permission_manager: PermissionManager,
+    worker_registry,
+    session_id: str | None = None,
+    backend_session_id: str | None = None,
+):
+    """Start a session described by a DB row on an existing Telegram thread."""
+    provider = normalize_provider(row.get("provider"))
+    server_name = normalize_server_name(row.get("server", "local"))
+    workdir = row["workdir"]
+    model = row.get("model")
+    session_id = row.get("session_id") if session_id is None else session_id
+    backend_session_id = (
+        row.get("backend_session_id") if backend_session_id is None else backend_session_id
+    )
+
+    if server_name != "local":
+        if not worker_registry.is_connected(server_name):
+            raise RuntimeError(f"Server '{server_name}' is not connected")
+        return await session_manager.create_remote(
+            thread_id=thread_id,
+            workdir=workdir,
+            worker_id=server_name,
+            worker_registry=worker_registry,
+            session_id=session_id,
+            backend_session_id=backend_session_id,
+            model=model,
+            provider=provider,
+        )
+
+    return await session_manager.create(
+        thread_id=thread_id,
+        workdir=workdir,
+        bot=bot,
+        chat_id=chat_id,
+        permission_manager=permission_manager,
+        session_id=session_id,
+        backend_session_id=backend_session_id,
+        model=model,
+        provider=provider,
+        codex_account=row.get("codex_account"),
+    )
 
 
 def _orchestrator_provider_candidates(preferred: str | None) -> list[str]:
@@ -363,6 +461,198 @@ def create_orchestrator_mcp_server(
             return {"content": [{"type": "text", "text": f"Error: {e}"}]}
 
     @tool(
+        "restart_session",
+        "Restart or resume a saved session in the same Telegram thread using its persisted backend session identifiers.",
+        {"thread_id": int},
+    )
+    async def restart_session(args: dict) -> dict:
+        thread_id = args["thread_id"]
+        try:
+            row = await get_session_by_thread(thread_id)
+            if not row:
+                return {"content": [{"type": "text", "text": f"No session record found for thread {thread_id}"}]}
+
+            provider = normalize_provider(row.get("provider"))
+            server_name = normalize_server_name(row.get("server", "local"))
+            session_id = row.get("session_id")
+            backend_session_id = row.get("backend_session_id")
+            resume_id = backend_session_id or session_id
+            if not resume_id:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"Thread {thread_id} has no saved backend session ID yet, "
+                            "so it cannot be resumed. Start a fresh session instead."
+                        ),
+                    }]
+                }
+
+            active = session_manager.get(thread_id)
+            if active is not None:
+                await session_manager.stop(thread_id)
+
+            await _start_managed_session_from_db_row(
+                thread_id=thread_id,
+                row=row,
+                bot=bot,
+                chat_id=chat_id,
+                session_manager=session_manager,
+                permission_manager=permission_manager,
+                worker_registry=worker_registry,
+            )
+            await update_session_state(thread_id, "idle")
+
+            await send_html_message(
+                bot,
+                chat_id=chat_id,
+                message_thread_id=thread_id,
+                text=(
+                    "🔄 Session restarted in this thread\n"
+                    f"Provider: {html_code(provider)}\n"
+                    f"Model: {html_code(row.get('model') or 'default')}\n"
+                    f"Server: {html.escape(server_name)}\n"
+                    f"Resume ID: {html_code(resume_id)}"
+                ),
+            )
+            await _notify_orchestrator(
+                bot,
+                chat_id=chat_id,
+                orchestrator_thread_id=orchestrator_thread_id,
+                text=_orchestrator_session_restarted_text(
+                    thread_id=thread_id,
+                    provider=provider,
+                    model=row.get("model"),
+                    server=server_name,
+                    workdir=row["workdir"],
+                ),
+            )
+            return {"content": [{"type": "text", "text": f"Session {thread_id} restarted in the same thread."}]}
+        except Exception as e:
+            logger.error("restart_session error: %s", e)
+            return {"content": [{"type": "text", "text": f"Error: {e}"}]}
+
+    @tool(
+        "resume_session_to_new_thread",
+        "Continue a saved session from one Telegram thread in a brand new thread. "
+        "Set stop_source=true to stop the source thread after the new one is ready.",
+        {"source_thread_id": int, "new_thread_name": str, "stop_source": bool},
+    )
+    async def resume_session_to_new_thread(args: dict) -> dict:
+        source_thread_id = args["source_thread_id"]
+        new_thread_name = args["new_thread_name"]
+        stop_source = args.get("stop_source", True)
+        try:
+            row = await get_session_by_thread(source_thread_id)
+            if not row:
+                return {
+                    "content": [{"type": "text", "text": f"No session record found for thread {source_thread_id}"}]
+                }
+
+            provider = normalize_provider(row.get("provider"))
+            server_name = normalize_server_name(row.get("server", "local"))
+            session_id = row.get("session_id")
+            backend_session_id = row.get("backend_session_id")
+            resume_id = backend_session_id or session_id
+            if not resume_id:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"Thread {source_thread_id} has no saved backend session ID yet, "
+                            "so it cannot be resumed in another thread."
+                        ),
+                    }]
+                }
+
+            if server_name != "local" and not worker_registry.is_connected(server_name):
+                return {"content": [{"type": "text", "text": f"Error: Server '{server_name}' not connected"}]}
+
+            topic = await bot(CreateForumTopic(chat_id=chat_id, name=new_thread_name))
+            target_thread_id = topic.message_thread_id
+
+            await insert_topic(target_thread_id, new_thread_name)
+            await insert_session(
+                target_thread_id,
+                row["workdir"],
+                model=row.get("model"),
+                server=server_name,
+                provider=provider,
+                backend_session_id=backend_session_id,
+                codex_account=row.get("codex_account"),
+            )
+            if session_id and provider == "claude":
+                from src.db.queries import update_session_id
+                await update_session_id(target_thread_id, session_id)
+
+            await _start_managed_session_from_db_row(
+                thread_id=target_thread_id,
+                row=row,
+                bot=bot,
+                chat_id=chat_id,
+                session_manager=session_manager,
+                permission_manager=permission_manager,
+                worker_registry=worker_registry,
+                session_id=session_id,
+                backend_session_id=backend_session_id,
+            )
+            await update_session_state(target_thread_id, "idle")
+
+            if stop_source:
+                active = session_manager.get(source_thread_id)
+                if active is not None:
+                    await session_manager.stop(source_thread_id)
+                await update_session_state(source_thread_id, "stopped")
+                with contextlib.suppress(Exception):
+                    await send_html_message(
+                        bot,
+                        chat_id=chat_id,
+                        message_thread_id=source_thread_id,
+                        text=(
+                            "🔁 This session was moved to a new thread\n"
+                            f"New thread: {html_code(target_thread_id)}"
+                        ),
+                    )
+
+            await send_html_message(
+                bot,
+                chat_id=chat_id,
+                message_thread_id=target_thread_id,
+                text=(
+                    "🔁 Session resumed from another thread\n"
+                    f"Previous thread: {html_code(source_thread_id)}\n"
+                    f"Provider: {html_code(provider)}\n"
+                    f"Model: {html_code(row.get('model') or 'default')}\n"
+                    f"Server: {html.escape(server_name)}\n"
+                    f"Resume ID: {html_code(resume_id)}"
+                ),
+            )
+            await _notify_orchestrator(
+                bot,
+                chat_id=chat_id,
+                orchestrator_thread_id=orchestrator_thread_id,
+                text=_orchestrator_session_resumed_text(
+                    source_thread_id=source_thread_id,
+                    target_thread_id=target_thread_id,
+                    provider=provider,
+                    model=row.get("model"),
+                    server=server_name,
+                    workdir=row["workdir"],
+                ),
+            )
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"Session from thread {source_thread_id} resumed in new thread {target_thread_id}."
+                    ),
+                }]
+            }
+        except Exception as e:
+            logger.error("resume_session_to_new_thread error: %s", e)
+            return {"content": [{"type": "text", "text": f"Error: {e}"}]}
+
+    @tool(
         "auto_mode",
         "Toggle auto-mode for a session — auto-approves all permissions without prompting the user. "
         "Pass enable=true to enable, enable=false to disable.",
@@ -558,7 +848,14 @@ def create_orchestrator_mcp_server(
 
         account_chain = get_codex_account_chain(settings.codex_accounts)
         if not account_chain:
-            return {"content": [{"type": "text", "text": "No Codex accounts configured (CODEX_ACCOUNTS is empty)."}]}
+            if settings.codex_accounts.strip():
+                text = (
+                    "No valid Codex accounts found in CODEX_ACCOUNTS; "
+                    "the default account is disabled because it is not listed."
+                )
+            else:
+                text = "No Codex accounts configured (CODEX_ACCOUNTS is empty)."
+            return {"content": [{"type": "text", "text": text}]}
 
         account_names = [path_to_account_name(p) for p in account_chain]
 
@@ -629,6 +926,8 @@ def create_orchestrator_mcp_server(
             create_session,
             list_sessions,
             stop_session,
+            restart_session,
+            resume_session_to_new_thread,
             auto_mode,
             goal_mode,
             send_to_session,
@@ -684,6 +983,11 @@ def _build_orchestrator_runner(
             raise RuntimeError("Codex orchestrator MCP server URL is missing")
         from src.sessions.codex_accounts import get_codex_account_chain
         account_chain = get_codex_account_chain(settings.codex_accounts)
+        if not account_chain and settings.codex_accounts.strip():
+            raise RuntimeError(
+                "No valid Codex accounts found in CODEX_ACCOUNTS; "
+                "the default account is disabled because it is not listed."
+            )
         codex_home = account_chain[0] if account_chain else None
         return CodexRunner(
             thread_id=thread_id,

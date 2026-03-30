@@ -15,7 +15,15 @@ from mcp.server.fastmcp import FastMCP
 
 from src.config import settings
 from src.bot.output import html_bold, html_code, send_html_message
-from src.db.queries import insert_session, insert_topic, update_auto_mode, update_goal_text, update_session_state
+from src.db.queries import (
+    get_session_by_thread,
+    insert_session,
+    insert_topic,
+    update_auto_mode,
+    update_goal_text,
+    update_session_id,
+    update_session_state,
+)
 from src.sessions.orchestrator import (
     _GOAL_IDLE_TIMEOUT,
     _goal_idle_watchdogs,
@@ -23,7 +31,10 @@ from src.sessions.orchestrator import (
     _notify_orchestrator,
     _orchestrator_auto_mode_text,
     _orchestrator_session_created_text,
+    _orchestrator_session_restarted_text,
+    _orchestrator_session_resumed_text,
     _orchestrator_session_stopped_text,
+    _start_managed_session_from_db_row,
 )
 from src.sessions.backend import (
     get_default_session_provider,
@@ -220,6 +231,175 @@ class LocalOrchestratorMcpServer:
                 text=_orchestrator_session_stopped_text(thread_id),
             )
             return f"Session {thread_id} stopped."
+
+        @self._fastmcp.tool(
+            name="restart_session",
+            description=(
+                "Restart or resume a saved session in the same Telegram thread using "
+                "its persisted backend session identifiers."
+            ),
+        )
+        async def restart_session(thread_id: int) -> str:
+            row = await get_session_by_thread(thread_id)
+            if not row:
+                return f"No session record found for thread {thread_id}"
+
+            provider = normalize_provider(row.get("provider"))
+            server = normalize_server_name(row.get("server", "local"))
+            session_id = row.get("session_id")
+            backend_session_id = row.get("backend_session_id")
+            resume_id = backend_session_id or session_id
+            if not resume_id:
+                return (
+                    f"Thread {thread_id} has no saved backend session ID yet, "
+                    "so it cannot be resumed."
+                )
+
+            active = self._session_manager.get(thread_id)
+            if active is not None:
+                await self._session_manager.stop(thread_id)
+
+            await _start_managed_session_from_db_row(
+                thread_id=thread_id,
+                row=row,
+                bot=self._bot,
+                chat_id=self._chat_id,
+                session_manager=self._session_manager,
+                permission_manager=self._permission_manager,
+                worker_registry=self._worker_registry,
+            )
+            await update_session_state(thread_id, "idle")
+
+            await send_html_message(
+                self._bot,
+                chat_id=self._chat_id,
+                message_thread_id=thread_id,
+                text=(
+                    "🔄 Session restarted in this thread\n"
+                    f"Provider: {html_code(provider)}\n"
+                    f"Model: {html_code(row.get('model') or 'default')}\n"
+                    f"Server: {html.escape(server)}\n"
+                    f"Resume ID: {html_code(resume_id)}"
+                ),
+            )
+            await _notify_orchestrator(
+                self._bot,
+                chat_id=self._chat_id,
+                orchestrator_thread_id=self._orchestrator_thread_id,
+                text=_orchestrator_session_restarted_text(
+                    thread_id=thread_id,
+                    provider=provider,
+                    model=row.get("model"),
+                    server=server,
+                    workdir=row["workdir"],
+                ),
+            )
+            return f"Session {thread_id} restarted in the same thread."
+
+        @self._fastmcp.tool(
+            name="resume_session_to_new_thread",
+            description=(
+                "Continue a saved session from one Telegram thread in a brand new thread. "
+                "Set stop_source=false to leave the source thread untouched."
+            ),
+        )
+        async def resume_session_to_new_thread(
+            source_thread_id: int,
+            new_thread_name: str,
+            stop_source: bool = True,
+        ) -> str:
+            row = await get_session_by_thread(source_thread_id)
+            if not row:
+                return f"No session record found for thread {source_thread_id}"
+
+            provider = normalize_provider(row.get("provider"))
+            server = normalize_server_name(row.get("server", "local"))
+            session_id = row.get("session_id")
+            backend_session_id = row.get("backend_session_id")
+            resume_id = backend_session_id or session_id
+            if not resume_id:
+                return (
+                    f"Thread {source_thread_id} has no saved backend session ID yet, "
+                    "so it cannot be resumed in another thread."
+                )
+
+            if server != "local" and not self._worker_registry.is_connected(server):
+                return f"Error: Server '{server}' not connected"
+
+            topic = await self._bot(CreateForumTopic(chat_id=self._chat_id, name=new_thread_name))
+            target_thread_id = topic.message_thread_id
+
+            await insert_topic(target_thread_id, new_thread_name)
+            await insert_session(
+                target_thread_id,
+                row["workdir"],
+                model=row.get("model"),
+                server=server,
+                provider=provider,
+                backend_session_id=backend_session_id,
+                codex_account=row.get("codex_account"),
+            )
+            if session_id and provider == "claude":
+                await update_session_id(target_thread_id, session_id)
+
+            await _start_managed_session_from_db_row(
+                thread_id=target_thread_id,
+                row=row,
+                bot=self._bot,
+                chat_id=self._chat_id,
+                session_manager=self._session_manager,
+                permission_manager=self._permission_manager,
+                worker_registry=self._worker_registry,
+                session_id=session_id,
+                backend_session_id=backend_session_id,
+            )
+            await update_session_state(target_thread_id, "idle")
+
+            if stop_source:
+                active = self._session_manager.get(source_thread_id)
+                if active is not None:
+                    await self._session_manager.stop(source_thread_id)
+                await update_session_state(source_thread_id, "stopped")
+                with contextlib.suppress(Exception):
+                    await send_html_message(
+                        self._bot,
+                        chat_id=self._chat_id,
+                        message_thread_id=source_thread_id,
+                        text=(
+                            "🔁 This session was moved to a new thread\n"
+                            f"New thread: {html_code(target_thread_id)}"
+                        ),
+                    )
+
+            await send_html_message(
+                self._bot,
+                chat_id=self._chat_id,
+                message_thread_id=target_thread_id,
+                text=(
+                    "🔁 Session resumed from another thread\n"
+                    f"Previous thread: {html_code(source_thread_id)}\n"
+                    f"Provider: {html_code(provider)}\n"
+                    f"Model: {html_code(row.get('model') or 'default')}\n"
+                    f"Server: {html.escape(server)}\n"
+                    f"Resume ID: {html_code(resume_id)}"
+                ),
+            )
+            await _notify_orchestrator(
+                self._bot,
+                chat_id=self._chat_id,
+                orchestrator_thread_id=self._orchestrator_thread_id,
+                text=_orchestrator_session_resumed_text(
+                    source_thread_id=source_thread_id,
+                    target_thread_id=target_thread_id,
+                    provider=provider,
+                    model=row.get("model"),
+                    server=server,
+                    workdir=row["workdir"],
+                ),
+            )
+            return (
+                f"Session from thread {source_thread_id} resumed in new thread {target_thread_id}."
+            )
 
         @self._fastmcp.tool(
             name="auto_mode",
