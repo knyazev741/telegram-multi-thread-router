@@ -2,17 +2,27 @@
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Optional
 
 from aiogram import Bot
 
+from src.config import settings
+from src.db.queries import update_codex_account, get_active_codex_session_counts
 from src.sessions.backend import (
     SessionBackend,
     SessionProvider,
     load_repo_local_instructions,
     normalize_provider,
 )
+from src.sessions.codex_accounts import get_codex_account_chain
 from src.sessions.codex_runner import CodexRunner
+from src.sessions.codex_usage import (
+    fetch_all_accounts_usage,
+    path_to_account_name,
+    invalidate_cache,
+)
+from src.sessions.codex_selector import score_accounts, select_best
 from src.sessions.permissions import PermissionManager
 from src.sessions.questions import QuestionManager
 from src.sessions.remote import RemoteSession
@@ -40,8 +50,13 @@ class SessionManager:
         backend_session_id: str | None = None,
         model: str | None = None,
         provider: str | None = None,
+        codex_account: str | None = None,
     ) -> SessionBackend:
         """Create and start a new SessionRunner for the given thread_id.
+
+        Args:
+            codex_account: Explicit codex account path to use (from DB on resume).
+                If None and provider is codex, the smart selector picks the best account.
 
         Raises ValueError if a session for that thread already exists.
         """
@@ -51,17 +66,27 @@ class SessionManager:
                 raise ValueError(f"Session for topic {thread_id} already exists")
             runner: SessionBackend
             if normalized_provider == "codex":
-                runner = CodexRunner(
+                runner, chosen_account = await self._create_codex_runner(
                     thread_id=thread_id,
                     workdir=workdir,
                     bot=bot,
                     chat_id=chat_id,
                     permission_manager=permission_manager,
-                    question_manager=self._question_manager,
                     backend_session_id=backend_session_id,
                     model=model,
-                    base_instructions=load_repo_local_instructions(workdir),
+                    codex_account=codex_account,
                 )
+                # Persist which account was chosen for resume
+                account_str = str(chosen_account) if chosen_account else "default"
+                try:
+                    await update_codex_account(thread_id, account_str)
+                except Exception:
+                    pass  # DB might not have the column yet during migration
+
+                # Invalidate the usage cache for the chosen account so that the
+                # next selection sees updated activity counts immediately.
+                account_name = path_to_account_name(chosen_account)
+                invalidate_cache(account_name)
             else:
                 runner = SessionRunner(
                     thread_id=thread_id,
@@ -76,6 +101,114 @@ class SessionManager:
             self._sessions[thread_id] = runner
             await runner.start()
             return runner
+
+    async def _create_codex_runner(
+        self,
+        thread_id: int,
+        workdir: str,
+        bot: Bot,
+        chat_id: int,
+        permission_manager: PermissionManager,
+        backend_session_id: str | None = None,
+        model: str | None = None,
+        codex_account: str | None = None,
+    ) -> tuple[CodexRunner, Path | None]:
+        """Create a CodexRunner, return (runner, chosen_codex_home).
+
+        On resume (codex_account provided): honour the stored account exactly.
+        On new session: use the smart selector to pick the best available account.
+        """
+        codex_home: Path | None
+
+        if codex_account is not None:
+            # ── Resume path: use the exact account stored in DB ───────────────
+            # "default" means no CODEX_HOME override (system default ~/.codex)
+            if codex_account == "default":
+                codex_home = None
+            else:
+                codex_home = Path(codex_account)
+            logger.info(
+                "Resuming Codex session for topic %d with saved account %s",
+                thread_id,
+                codex_account,
+            )
+        else:
+            # ── New session: smart selection ──────────────────────────────────
+            codex_home = await self._pick_best_codex_account()
+
+        runner = CodexRunner(
+            thread_id=thread_id,
+            workdir=workdir,
+            bot=bot,
+            chat_id=chat_id,
+            permission_manager=permission_manager,
+            question_manager=self._question_manager,
+            backend_session_id=backend_session_id,
+            model=model,
+            base_instructions=load_repo_local_instructions(workdir),
+            codex_home=codex_home,
+        )
+        return runner, codex_home
+
+    async def _pick_best_codex_account(self) -> Path | None:
+        """Select the best Codex account using live usage data + active session counts.
+
+        Falls back gracefully to chain[0] if the usage API is unreachable or
+        the account chain is empty.
+        """
+        account_chain = get_codex_account_chain(settings.codex_accounts)
+        if not account_chain:
+            return None
+
+        # Only one account configured — skip the API round-trip
+        if len(account_chain) == 1:
+            chosen = account_chain[0]
+            logger.info(
+                "Single Codex account configured, using %s",
+                str(chosen) if chosen else "default",
+            )
+            return chosen
+
+        account_names = [path_to_account_name(p) for p in account_chain]
+
+        try:
+            # Fetch usage for all accounts in parallel
+            usages = await fetch_all_accounts_usage(account_chain, account_names)
+
+            # Get active session counts from DB
+            active_counts = await get_active_codex_session_counts()
+
+            # Score and pick best
+            scores = score_accounts(usages, active_counts)
+            best = select_best(scores)
+
+            if best is not None:
+                logger.info(
+                    "Smart Codex account selection: chose '%s' "
+                    "(score=%.1f, 5h=%.0f%%, weekly=%.0f%%, active=%d) "
+                    "from chain %s",
+                    best.account_name,
+                    best.score,
+                    best.adjusted_5h,
+                    best.weekly_remaining,
+                    best.active_count,
+                    account_names,
+                )
+                return best.codex_home
+
+        except Exception as exc:
+            logger.warning(
+                "Smart Codex account selection failed (%s); falling back to chain[0]",
+                exc,
+            )
+
+        # Fallback: use the first entry in the chain (original behaviour)
+        fallback = account_chain[0]
+        logger.info(
+            "Fallback Codex account: %s",
+            str(fallback) if fallback else "default",
+        )
+        return fallback
 
     async def create_remote(
         self,
@@ -184,6 +317,7 @@ class SessionManager:
                     backend_session_id=backend_session_id,
                     model=model,
                     provider=provider,
+                    codex_account=row.get("codex_account"),
                 )
                 # Restore auto_mode and goal_text from DB
                 if row.get("auto_mode"):

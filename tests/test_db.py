@@ -53,6 +53,7 @@ async def test_sessions_table_exists(tmp_db):
             "model",
             "auto_mode",
             "goal_text",
+            "codex_account",
         }
 
 

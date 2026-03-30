@@ -31,14 +31,15 @@ async def insert_session(
     server: str = "local",
     provider: str | None = None,
     backend_session_id: str | None = None,
+    codex_account: str | None = None,
 ) -> None:
     """Insert a new session record with state='idle'."""
     provider = normalize_provider(provider)
     async with get_connection() as conn:
         await conn.execute(
-            "INSERT INTO sessions (thread_id, workdir, model, state, server, provider, backend_session_id) "
-            "VALUES (?, ?, ?, 'idle', ?, ?, ?)",
-            (thread_id, workdir, model, server, provider, backend_session_id),
+            "INSERT INTO sessions (thread_id, workdir, model, state, server, provider, backend_session_id, codex_account) "
+            "VALUES (?, ?, ?, 'idle', ?, ?, ?, ?)",
+            (thread_id, workdir, model, server, provider, backend_session_id, codex_account),
         )
         await conn.commit()
 
@@ -50,6 +51,16 @@ async def update_session_id(thread_id: int, session_id: str) -> None:
             "UPDATE sessions SET session_id=?, backend_session_id=?, updated_at=datetime('now') "
             "WHERE thread_id=?",
             (session_id, session_id, thread_id),
+        )
+        await conn.commit()
+
+
+async def update_codex_account(thread_id: int, codex_account: str | None) -> None:
+    """Update the codex_account used for a session."""
+    async with get_connection() as conn:
+        await conn.execute(
+            "UPDATE sessions SET codex_account=?, updated_at=datetime('now') WHERE thread_id=?",
+            (codex_account, thread_id),
         )
         await conn.commit()
 
@@ -92,7 +103,7 @@ async def get_resumable_sessions() -> list[dict]:
         try:
             cursor = await conn.execute(
                 "SELECT thread_id, session_id, backend_session_id, workdir, model, state, server, "
-                "provider, auto_mode, goal_text FROM sessions "
+                "provider, auto_mode, goal_text, codex_account FROM sessions "
                 "WHERE state IN ('running', 'idle') AND ("
                 "(provider='claude' AND session_id IS NOT NULL) OR "
                 "(provider!='claude' AND backend_session_id IS NOT NULL)"
@@ -103,7 +114,8 @@ async def get_resumable_sessions() -> list[dict]:
                 raise
             cursor = await conn.execute(
                 "SELECT thread_id, session_id, session_id AS backend_session_id, workdir, "
-                "NULL AS model, state, server, 'claude' AS provider, 0 AS auto_mode FROM sessions "
+                "NULL AS model, state, server, 'claude' AS provider, 0 AS auto_mode, "
+                "NULL AS goal_text, NULL AS codex_account FROM sessions "
                 "WHERE state IN ('running', 'idle') AND session_id IS NOT NULL"
             )
         rows = await cursor.fetchall()
@@ -162,6 +174,34 @@ async def update_goal_text(thread_id: int, goal_text: str | None) -> None:
             (goal_text, thread_id),
         )
         await conn.commit()
+
+
+async def get_active_codex_session_counts(since_minutes: int = 30) -> dict[str, int]:
+    """Return active session counts keyed by codex_account for recently used sessions.
+
+    A session is "active" if:
+      - its state is 'running' (turn in progress right now), OR
+      - its state is 'idle' and updated_at is within *since_minutes* (recently finished a turn)
+
+    The returned dict maps the raw ``codex_account`` DB value (e.g. ``"/root/.codex-a4"``
+    or ``"default"``) to the number of active sessions on that account.
+    """
+    async with get_connection() as conn:
+        try:
+            cursor = await conn.execute(
+                "SELECT codex_account, COUNT(*) as cnt FROM sessions "
+                "WHERE codex_account IS NOT NULL "
+                "AND state IN ('running', 'idle') "
+                "AND (state = 'running' OR updated_at > datetime('now', ?)) "
+                "GROUP BY codex_account",
+                (f"-{since_minutes} minutes",),
+            )
+            rows = await cursor.fetchall()
+            return {row[0]: row[1] for row in rows}
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("get_active_codex_session_counts failed: %s", exc)
+            return {}
 
 
 async def delete_session_and_topic(thread_id: int) -> None:

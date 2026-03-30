@@ -540,9 +540,100 @@ def create_orchestrator_mcp_server(
         await runner.enqueue(message)
         return {"content": [{"type": "text", "text": f"Message sent to thread {thread_id}"}]}
 
+    @tool(
+        "codex_usage_report",
+        "Show live Codex usage limits for all configured accounts: "
+        "5-hour window, weekly window, credits balance, active session count, and smart-selector score. "
+        "Use this to understand which account will be chosen for the next Codex session.",
+        {},
+    )
+    async def codex_usage_report(args: dict) -> dict:
+        from src.sessions.codex_accounts import get_codex_account_chain
+        from src.sessions.codex_usage import fetch_all_accounts_usage, path_to_account_name
+        from src.sessions.codex_selector import score_accounts, select_best
+        from src.db.queries import get_active_codex_session_counts
+
+        if not settings.enable_codex:
+            return {"content": [{"type": "text", "text": "Codex is disabled (ENABLE_CODEX=false)."}]}
+
+        account_chain = get_codex_account_chain(settings.codex_accounts)
+        if not account_chain:
+            return {"content": [{"type": "text", "text": "No Codex accounts configured (CODEX_ACCOUNTS is empty)."}]}
+
+        account_names = [path_to_account_name(p) for p in account_chain]
+
+        try:
+            usages = await fetch_all_accounts_usage(account_chain, account_names)
+            active_counts = await get_active_codex_session_counts()
+            scores = score_accounts(usages, active_counts)
+            best = select_best(scores)
+        except Exception as exc:
+            return {"content": [{"type": "text", "text": f"Error fetching usage data: {exc}"}]}
+
+        lines = ["📊 Codex Account Usage Report\n"]
+        for score in scores:
+            usage = next((u for u in usages if u.account_name == score.account_name), None)
+
+            # 5h window info
+            if usage and usage.primary:
+                p = usage.primary
+                resets_str = (
+                    f"resets in {p.resets_in_minutes:.0f}min"
+                    if p.resets_in_minutes is not None
+                    else "reset unknown"
+                )
+                fiveh = f"{p.remaining_percent:.0f}% remaining ({resets_str})"
+            else:
+                fiveh = "N/A"
+
+            # Weekly window info
+            if usage and usage.secondary:
+                s = usage.secondary
+                weekly_resets_str = (
+                    f"resets in {s.resets_in_minutes:.0f}min"
+                    if s.resets_in_minutes is not None
+                    else "reset unknown"
+                )
+                weekly = f"{s.remaining_percent:.0f}% remaining ({weekly_resets_str})"
+            else:
+                weekly = "N/A"
+
+            # Credits
+            credits_str = (
+                f"${usage.credits_balance:.2f}"
+                if usage and usage.credits_balance is not None
+                else "N/A"
+            )
+
+            # Error
+            error_str = f"\n  ⚠️ Error: {usage.error}" if (usage and usage.error) else ""
+
+            status = "✅" if score.is_qualified else "❌"
+            selected = " 👈 SELECTED" if best and score.account_name == best.account_name else ""
+            disq = f"\n  ⛔ {score.disqualify_reason}" if score.disqualify_reason else ""
+
+            lines.append(
+                f"{status} {score.account_name}{selected}\n"
+                f"  Score: {score.score:.1f}  Active sessions: {score.active_count}\n"
+                f"  5h:     {fiveh}\n"
+                f"  Weekly: {weekly}\n"
+                f"  Credits: {credits_str}"
+                f"{disq}{error_str}"
+            )
+
+        return {"content": [{"type": "text", "text": "\n\n".join(lines)}]}
+
     return create_sdk_mcp_server(
         "orchestrator",
-        tools=[create_session, list_sessions, stop_session, auto_mode, goal_mode, send_to_session],
+        tools=[
+            create_session,
+            list_sessions,
+            stop_session,
+            auto_mode,
+            goal_mode,
+            send_to_session,
+            codex_usage_report,
+        ],
     )
 
 
@@ -591,6 +682,9 @@ def _build_orchestrator_runner(
             raise RuntimeError("Codex is disabled but configured as the orchestrator provider")
         if not orchestrator_mcp_url:
             raise RuntimeError("Codex orchestrator MCP server URL is missing")
+        from src.sessions.codex_accounts import get_codex_account_chain
+        account_chain = get_codex_account_chain(settings.codex_accounts)
+        codex_home = account_chain[0] if account_chain else None
         return CodexRunner(
             thread_id=thread_id,
             workdir=str(Path.home()),
@@ -602,6 +696,7 @@ def _build_orchestrator_runner(
             model=model,
             developer_instructions=_build_orchestrator_system_prompt(provider),
             mcp_server_urls={"orchestrator": orchestrator_mcp_url},
+            codex_home=codex_home,
         )
 
     runner = SessionRunner(

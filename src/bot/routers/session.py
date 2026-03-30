@@ -541,6 +541,87 @@ async def handle_document(message: Message, session_manager: SessionManager) -> 
 @session_router.message(
     F.message_thread_id.is_not(None),
     F.message_thread_id != 1,
+    Command("codex"),
+)
+async def handle_codex_usage(message: Message) -> None:
+    """/codex — show live Codex account limits: 5h window, weekly, drain/urgency scores."""
+    from src.config import settings
+    from src.sessions.codex_accounts import get_codex_account_chain
+    from src.sessions.codex_usage import fetch_all_accounts_usage, path_to_account_name, clear_cache
+    from src.sessions.codex_selector import score_accounts, select_best
+    from src.db.queries import get_active_codex_session_counts
+
+    if not settings.enable_codex:
+        await message.reply("Codex is disabled (ENABLE_CODEX=false).")
+        return
+
+    account_chain = get_codex_account_chain(settings.codex_accounts)
+    if not account_chain:
+        await message.reply("No Codex accounts configured (CODEX_ACCOUNTS is empty).")
+        return
+
+    account_names = [path_to_account_name(p) for p in account_chain]
+
+    try:
+        usages = await fetch_all_accounts_usage(account_chain, account_names)
+        active_counts = await get_active_codex_session_counts()
+        scores = score_accounts(usages, active_counts)
+        best = select_best(scores)
+    except Exception as exc:
+        await message.reply(f"Error fetching usage: {html.escape(str(exc))}", parse_mode="HTML")
+        return
+
+    lines = ["📊 <b>Codex Account Limits</b>\n"]
+    for sc in scores:
+        u = next((x for x in usages if x.account_name == sc.account_name), None)
+
+        # 5h window
+        if u and u.primary:
+            p = u.primary
+            rim = p.resets_in_minutes
+            reset_str = f"{rim:.0f}min" if rim is not None else "?"
+            fiveh_str = f"{p.remaining_percent:.0f}% (resets in {reset_str})"
+        else:
+            fiveh_str = "N/A"
+
+        # Weekly window
+        if u and u.secondary:
+            s = u.secondary
+            wrim = s.resets_in_minutes
+            wreset_str = f"{wrim / 60:.1f}h" if wrim is not None else "?"
+            weekly_str = f"{s.remaining_percent:.0f}% (resets in {wreset_str})"
+        else:
+            weekly_str = "N/A"
+
+        credits_str = f"${u.credits_balance:.2f}" if u and u.credits_balance is not None else ""
+
+        status = "✅" if sc.is_qualified else "❌"
+        selected = " 👈" if best and sc.account_name == best.account_name else ""
+        disq = f"\n  ⛔ {html.escape(sc.disqualify_reason)}" if sc.disqualify_reason else ""
+        err = f"\n  ⚠️ {html.escape(u.error)}" if u and u.error else ""
+
+        extras = []
+        if sc.drain_bonus > 1:
+            extras.append(f"drain={sc.drain_bonus:.0f}")
+        if sc.urgency_weekly > 5:
+            extras.append(f"urgency_wk={sc.urgency_weekly:.0f}")
+        extra_str = f"  [{', '.join(extras)}]" if extras else ""
+
+        lines.append(
+            f"{status} <b>{html.escape(sc.account_name)}</b>{selected}  "
+            f"score={sc.score:.0f}  active={sc.active_count}{extra_str}\n"
+            f"  5h:     {html.escape(fiveh_str)}\n"
+            f"  weekly: {html.escape(weekly_str)}"
+            + (f"  {credits_str}" if credits_str else "")
+            + disq + err
+        )
+
+    await message.reply("\n\n".join(lines), parse_mode="HTML")
+
+
+@session_router.message(
+    F.message_thread_id.is_not(None),
+    F.message_thread_id != 1,
     Command("list"),
 )
 async def handle_list_in_session(
