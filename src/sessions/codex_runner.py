@@ -186,6 +186,7 @@ class CodexRunner:
                 await self._typing.start()
 
                 try:
+                    await self._drain_stale_messages()
                     await self._run_turn(prompt=item.text, input_items=item.input_items)
                 finally:
                     if self._typing:
@@ -276,7 +277,7 @@ class CodexRunner:
             self.backend_session_id = thread_id
             await update_backend_session_id(self.thread_id, thread_id)
 
-        await self._drain_non_turn_messages()
+        await self._drain_stale_messages()
 
     async def _run_turn(
         self,
@@ -342,6 +343,10 @@ class CodexRunner:
                 watchdog_task = asyncio.create_task(_watchdog_notify())
                 method = message.get("method")
                 params = message.get("params", {})
+
+                if self._is_stale_turn_message(message):
+                    await self._handle_stale_turn_message(message)
+                    continue
 
                 if "id" in message and method:
                     await self._handle_server_request(message)
@@ -763,8 +768,64 @@ class CodexRunner:
             return "".join(parts)
         return ""
 
-    async def _drain_non_turn_messages(self) -> None:
-        """Best-effort drain a few startup messages that are not tied to an active turn."""
+    @staticmethod
+    def _message_turn_id(message: dict[str, Any]) -> str | None:
+        """Best-effort extract a turn id from a server message."""
+        params = message.get("params", {})
+        if not isinstance(params, dict):
+            return None
+
+        turn_id = params.get("turnId")
+        if isinstance(turn_id, str) and turn_id:
+            return turn_id
+
+        turn = params.get("turn")
+        if isinstance(turn, dict):
+            nested_turn_id = turn.get("id")
+            if isinstance(nested_turn_id, str) and nested_turn_id:
+                return nested_turn_id
+
+        return None
+
+    def _is_stale_turn_message(self, message: dict[str, Any]) -> bool:
+        """Return True when a message belongs to an older turn than the active one."""
+        message_turn_id = self._message_turn_id(message)
+        return bool(
+            self._current_turn_id
+            and message_turn_id
+            and message_turn_id != self._current_turn_id
+        )
+
+    async def _handle_stale_turn_message(self, message: dict[str, Any]) -> None:
+        """Discard or safely resolve stale messages from previously completed turns."""
+        method = message.get("method")
+        stale_turn_id = self._message_turn_id(message)
+        logger.info(
+            "Discarding stale Codex message in thread %d: method=%s stale_turn=%s current_turn=%s",
+            self.thread_id,
+            method,
+            stale_turn_id,
+            self._current_turn_id,
+        )
+
+        if "id" in message and method and self._client is not None:
+            request_id = message["id"]
+            if method in {
+                "item/commandExecution/requestApproval",
+                "item/fileChange/requestApproval",
+            }:
+                await self._client.respond(request_id, {"decision": "decline"})
+                return
+            if method == "item/permissions/requestApproval":
+                await self._client.respond(request_id, {"scope": "turn", "permissions": {}})
+                return
+            if method == "item/tool/requestUserInput":
+                await self._client.respond(request_id, {"answers": {}})
+                return
+            await self._client.respond(request_id, {})
+
+    async def _drain_stale_messages(self) -> None:
+        """Drain notifications left behind by older turns before starting a new one."""
         if self._client is None:
             return
         while True:
@@ -780,6 +841,9 @@ class CodexRunner:
                 if thread_id and thread_id != self.backend_session_id:
                     self.backend_session_id = thread_id
                     await update_backend_session_id(self.thread_id, thread_id)
+                continue
+
+            await self._handle_stale_turn_message(message)
 
     async def _handle_compat_command(self, text: str) -> bool:
         """Implement the highest-value Claude-like slash commands for Codex."""

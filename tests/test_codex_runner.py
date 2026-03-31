@@ -223,6 +223,147 @@ async def test_run_turn_buffers_codex_delta_when_streaming_disabled(monkeypatch)
     assert sent[0]["reply_to_message_id"] == 99
 
 
+async def test_drain_stale_messages_discards_old_turn_output():
+    sent = []
+
+    async def _send_message(**kwargs):
+        sent.append(kwargs)
+        return MagicMock(message_id=len(sent))
+
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(side_effect=_send_message)
+    runner = CodexRunner(thread_id=10, workdir="/tmp", bot=bot, chat_id=5)
+    runner.backend_session_id = "thread-123"
+    runner._client = _FakeClient(
+        messages=[
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": "old-turn",
+                    "item": {
+                        "id": "old-msg",
+                        "type": "agentMessage",
+                        "content": [{"type": "outputText", "text": "OLD SUBAGENT OUTPUT"}],
+                    },
+                },
+            },
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "old-turn", "status": "completed"}},
+            },
+        ]
+    )
+
+    await runner._drain_stale_messages()
+
+    assert sent == []
+    assert runner._client.messages == []
+
+
+async def test_run_turn_ignores_stale_old_turn_messages():
+    sent = []
+
+    async def _send_message(**kwargs):
+        sent.append(kwargs)
+        return MagicMock(message_id=len(sent))
+
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(side_effect=_send_message)
+    runner = CodexRunner(thread_id=10, workdir="/tmp", bot=bot, chat_id=5)
+    runner.backend_session_id = "thread-123"
+    runner._current_reply_to = 99
+    runner._status = MagicMock()
+    runner._status.track_usage = MagicMock()
+    runner._status.finalize = AsyncMock()
+    runner._client = _FakeClient(
+        messages=[
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": "old-turn",
+                    "item": {
+                        "id": "old-msg",
+                        "type": "agentMessage",
+                        "content": [{"type": "outputText", "text": "OLD SUBAGENT OUTPUT"}],
+                    },
+                },
+            },
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": "old-turn", "status": "completed"}},
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": "turn-123",
+                    "item": {
+                        "id": "new-msg",
+                        "type": "agentMessage",
+                        "content": [{"type": "outputText", "text": "NEW TURN OUTPUT"}],
+                    },
+                },
+            },
+            {"method": "turn/completed", "params": {"turn": {"id": "turn-123", "status": "completed"}}},
+        ]
+    )
+
+    await runner._run_turn("hello")
+
+    assert len(sent) == 1
+    assert sent[0]["text"] == "NEW TURN OUTPUT"
+    assert sent[0]["reply_to_message_id"] == 99
+    assert runner._client.messages == []
+
+
+async def test_run_turn_declines_stale_old_turn_permission_request():
+    sent = []
+
+    async def _send_message(**kwargs):
+        sent.append(kwargs)
+        return MagicMock(message_id=len(sent))
+
+    bot = AsyncMock()
+    bot.send_message = AsyncMock(side_effect=_send_message)
+    runner = CodexRunner(thread_id=10, workdir="/tmp", bot=bot, chat_id=5)
+    runner.backend_session_id = "thread-123"
+    runner._current_reply_to = 99
+    runner._status = MagicMock()
+    runner._status.track_usage = MagicMock()
+    runner._status.finalize = AsyncMock()
+    runner._client = _FakeClient(
+        messages=[
+            {
+                "id": 77,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "turnId": "old-turn",
+                    "threadId": "thread-123",
+                    "itemId": "cmd-1",
+                    "command": "rm -rf /tmp/nope",
+                },
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": "turn-123",
+                    "item": {
+                        "id": "new-msg",
+                        "type": "agentMessage",
+                        "content": [{"type": "outputText", "text": "NEW TURN OUTPUT"}],
+                    },
+                },
+            },
+            {"method": "turn/completed", "params": {"turn": {"id": "turn-123", "status": "completed"}}},
+        ]
+    )
+
+    await runner._run_turn("hello")
+
+    assert runner._client.responses == [(77, {"decision": "decline"})]
+    assert len(sent) == 1
+    assert sent[0]["text"] == "NEW TURN OUTPUT"
+
+
 async def test_interrupt_requests_turn_interrupt():
     runner = CodexRunner(thread_id=1, workdir="/tmp", bot=AsyncMock(), chat_id=1)
     runner.state = SessionState.RUNNING
